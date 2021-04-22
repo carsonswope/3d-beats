@@ -1,2 +1,3 @@
 build
-datagen/test_out
+datagen/generated
+*.blend1

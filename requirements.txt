@@ -1,0 +1,3 @@
+numpy
+pillow
+pycuda=2021.1
