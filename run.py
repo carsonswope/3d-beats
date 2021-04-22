@@ -6,6 +6,8 @@ import pycuda.autoinit
 import pycuda.gpuarray as cu_array
 from pycuda.compiler import SourceModule
 
+np.set_printoptions(suppress=True)
+
 cu_file = open('tree_train.cu', 'r')
 cu_text = cu_file.read()
 cu_mod = SourceModule(cu_text)
@@ -115,6 +117,8 @@ def get_pixel_info(pixel_id):
 def gini_impurity2(c):
     # c = (num0, num1)
     # counts of class0 and class1 in set
+    if c[0] + c[1] == 0:
+        print('u')
     p = c[0] / (c[0] + c[1])
     return 2 * p * (1-p)
 
@@ -140,90 +144,158 @@ num_pixels = NUM_TEST * IMG_DIMS[1] * IMG_DIMS[0]
 MAX_TREE_DEPTH = 8
 max_groups = 2**MAX_TREE_DEPTH # decision tree could have this many leaf nodes!
 
-#
+NUM_RANDOM_FEATURES = 32
+
 group_counts = np.zeros((max_groups, NUM_CLASSES), dtype=np.uint64)
-# initialize counts of each class in group 0. Don't keep track of 'NONE' group - we won't even try to classify that group!
-group_counts[0,1:3] = np.unique(test_labels, return_counts=True)[1][1:3]
+group_counts[0,1:] = np.unique(test_labels, return_counts=True)[1][1:]
 
-# each round of training should be a per-pixel operation
-# buffer keeping track of which group each buffer is in
-groups = np.zeros(num_pixels, dtype=np.uint32)
-
+# start each pixel part of group -1
+groups = np.ones((NUM_TEST, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.int32) * -1
+# anything that isn't NO_LABEL (not 0 depth) gets put in group 0 to start
+groups[np.where(test_labels > 0)] = 0
 groups_cu = cu_array.to_gpu(groups)
 
-
-NUM_RANDOM_FEATURES = 16
-
-
-proposal_features = [(make_random_feature(), make_random_threshold()) for i in range(NUM_RANDOM_FEATURES)]
-# ((u,v),thresh)
-
-# proposal_features = [
-#     (([-22799.52010017,  31844.44542072], [-23159.7254717 ,  65518.98616169]), 224.99636734542378),
-#     (([  -692.84064766, -50510.43509532], [-54872.58399917, -18403.33368239]), 377.3484252752879),
-#     (([42677.79857804, 42241.78039404], [ 12208.86884946, -44481.27711877]), -324.198649832124),
-#     (([-13328.76273914,  -4973.62915883], [  -521.67342981, -19904.1950021 ]), 256.12471173659424),
-#     (([ 1063.90107223, 74731.37571924], [-29564.23398385, -57884.01713972]), 144.03060763675796),
-#     (([ 26590.19023191, -17289.6001013 ], [18140.50055884, 73247.22299132]), 220.399343623307),
-#     (([52841.11705466, 47489.93466609], [-77901.91054828, -41492.58656817]), -160.12803605488904),
-#     (([-46233.29062441,  72860.17060032], [-44751.44155779,   2178.14506526]), 289.6863955782877)
-# ]
-
-# proposal_features_flat = np.array([
-#     [-22799.52010017,  31844.44542072, -23159.7254717 ,  65518.98616169, 224.99636734542378],
-#     [  -692.84064766, -50510.43509532, -54872.58399917, -18403.33368239, 377.3484252752879],
-#     [42677.79857804, 42241.78039404, 12208.86884946, -44481.27711877, -324.198649832124],
-#     [-13328.76273914,  -4973.62915883, -521.67342981, -19904.1950021 , 256.12471173659424],
-#     [ 1063.90107223, 74731.37571924, -29564.23398385, -57884.01713972, 144.03060763675796],
-#     [ 26590.19023191, -17289.6001013, 18140.50055884, 73247.22299132, 220.399343623307],
-#     [52841.11705466, 47489.93466609, -77901.91054828, -41492.58656817, -160.12803605488904],
-#     [-46233.29062441,  72860.17060032, -44751.44155779,   2178.14506526, 289.6863955782877]
-# ], dtype=np.float32)
-
-proposal_features_flat = np.array([(p[0][0][0], p[0][0][1], p[0][1][0], p[0][1][1], p[1]) for p in proposal_features ], dtype=np.float32)
-
+# empty proposals buffer
+proposal_features_flat = np.zeros((NUM_RANDOM_FEATURES, 5), dtype=np.float32)
 proposal_features_cu = cu_array.to_gpu(proposal_features_flat)
 
-next_group_counts = np.zeros((NUM_RANDOM_FEATURES, max_groups, NUM_CLASSES), dtype=np.int64)
-next_groups = np.zeros((NUM_RANDOM_FEATURES, num_pixels), dtype=np.int32)
-
+# empty 'next group counts'
+next_group_counts = np.zeros((NUM_RANDOM_FEATURES, max_groups, NUM_CLASSES), dtype=np.uint64)
 next_group_counts_cu = cu_array.to_gpu(next_group_counts)
+
+# empty 'next groups': for each random 
+next_groups = np.ones((NUM_RANDOM_FEATURES, NUM_TEST, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.int32) * -1
 next_groups_cu = cu_array.to_gpu(next_groups)
 
-exec_dim_x = num_pixels
-exec_dim_y = NUM_RANDOM_FEATURES
+active_groups = [0]
+active_next_groups = []
 
-grid_dim = (int(num_pixels / 32) + 1, 1, 1)
-block_dim = (32, NUM_RANDOM_FEATURES, 1)
+tree_out = np.zeros((MAX_TREE_DEPTH, max_groups, 7), dtype=np.float32) # ux,uy,vx,vy,thresh,l_class,r_class - if class is set to -1, then evaluation continues!
+leaf_pdfs = np.zeros((max_groups, NUM_CLASSES))
 
-cu_eval_random_features(
-    test_labels_cu,
-    test_depth_cu,
-    proposal_features_cu,
-    groups_cu,
-    next_groups_cu,
-    next_group_counts_cu,
-    grid=grid_dim, block=block_dim)
+for current_level in range(MAX_TREE_DEPTH):
 
-next_groups_cu.get(next_groups)
-next_group_counts_cu.get(next_group_counts)
+    # make list of random features
+    proposal_features = [(make_random_feature(), make_random_threshold()) for i in range(NUM_RANDOM_FEATURES)]
+    proposal_features_flat = np.array([(p[0][0][0], p[0][0][1], p[0][1][0], p[0][1][1], p[1]) for p in proposal_features ], dtype=np.float32)
+    proposal_features_cu.set(proposal_features_flat)
 
-best_gain = 0
-best_gain_idx = 0
+    # reset next group counts
+    next_group_counts[:,:,:] = 0
+    next_group_counts_cu.set(next_group_counts)
 
-actual_gains = []
-for f in range(NUM_RANDOM_FEATURES):
-    start_group_counts = group_counts[0][1:]
-    next_group_counts_f = next_group_counts[f,0:2,1:]
-    g = gini_gain2(start_group_counts, next_group_counts_f)
-    actual_gains.append(g)
-    print('gain: ', g)
-    if g > best_gain:
-        best_gain = g
-        best_gain_idx = f
-        # best_gain_f = proposal_features[f]
+    # reset next groups
+    next_groups[:,:,:,:] = -1
+    next_groups_cu.set(next_groups)
 
-best_gain_feature = proposal_features_flat[best_gain_idx]
-print('best gain: ', best_gain)
-print(best_gain_feature)
+    exec_dim_x = num_pixels
+    exec_dim_y = NUM_RANDOM_FEATURES
+
+    grid_dim = (int(num_pixels / 32) + 1, 1, 1)
+    block_dim = (32, NUM_RANDOM_FEATURES, 1)
+
+    cu_eval_random_features(
+        test_labels_cu,
+        test_depth_cu,
+        proposal_features_cu,
+        groups_cu,
+        next_groups_cu,
+        next_group_counts_cu,
+        grid=grid_dim, block=block_dim)
+
+    next_groups_cu.get(next_groups)
+    next_group_counts_cu.get(next_group_counts)
+
+    # reset all groups. will be re-set when evaluating results of kernel
+    groups[:] = -1
+
+    processed_group_counts = np.zeros((max_groups, NUM_CLASSES), dtype=np.uint64)
+
+    for parent_group in active_groups:
+        if parent_group == -1:
+            continue
+
+        left_child = parent_group * 2
+        right_child = (parent_group * 2) + 1
+
+        parent_counts = np.copy(group_counts[parent_group][1:])
+
+        # check reach random feature for the performance of X group ID
+        best_g = 0
+        best_g_idx = None
+        best_left_counts = None
+        best_right_counts = None
+
+        for f in range(NUM_RANDOM_FEATURES):
+            left_counts = next_group_counts[f][left_child][1:]
+            right_counts = next_group_counts[f][right_child][1:]
+
+            assert np.sum(left_counts) + np.sum(right_counts) == np.sum(parent_counts)
+
+            if not np.sum(left_counts) or not np.sum(right_counts):
+                g = 0
+            else:
+                g = gini_gain2(parent_counts, [left_counts, right_counts])
+
+            if g > best_g:
+                best_g = g
+                best_g_idx = f
+                best_left_counts = np.copy(left_counts)
+                best_right_counts = np.copy(right_counts)
+
+        assert np.all(best_right_counts + best_left_counts == parent_counts)
+        
+        # current tree level / current tree node idx
+        tree_out[current_level][parent_group][0:5] = np.copy(proposal_features_flat[best_g_idx])
+
+        left_group_pixels = np.where(next_groups[best_g_idx] == left_child)
+        right_group_pixels = np.where(next_groups[best_g_idx] == right_child)
+        
+        assert left_group_pixels[0].shape[0] + right_group_pixels[0].shape[0] == np.sum(parent_counts)
+
+        CUTOFF_THRESH = 0.999
+
+        # determine left node
+        best_left_counts_normalized = best_left_counts / np.sum(best_left_counts)
+        if np.any(best_left_counts_normalized > CUTOFF_THRESH):
+            # threshold is reached.
+            # treat as leaf node
+            out_class = np.where(best_left_counts_normalized > CUTOFF_THRESH)[0][0] + 1 # add one because first element in array was removed before
+            tree_out[current_level][parent_group][5] = out_class
+        else:
+            # keep tree going on left!
+            tree_out[current_level][parent_group][5] = -1
+            groups[left_group_pixels] = left_child
+            active_next_groups.append(left_child)
+            processed_group_counts[left_child][1:] = np.copy(best_left_counts)
+            if current_level == MAX_TREE_DEPTH - 1:
+                leaf_pdfs[left_child,0] = 0.
+                leaf_pdfs[left_child,1:] = np.copy(best_left_counts_normalized)
+
+        best_right_counts_normalized = best_right_counts / np.sum(best_right_counts)
+        if np.any(best_right_counts_normalized > CUTOFF_THRESH):
+            # threshold is reached
+            # treat as leaf node
+            out_class = np.where(best_right_counts_normalized > CUTOFF_THRESH)[0][0] + 1
+            tree_out[current_level][parent_group][6] = out_class
+        else:
+            tree_out[current_level][parent_group][6] = -1
+            groups[right_group_pixels] = right_child
+            active_next_groups.append(right_child)
+            processed_group_counts[right_child][1:] = np.copy(best_right_counts)
+            if current_level == MAX_TREE_DEPTH - 1:
+                leaf_pdfs[right_child,0] = 0.
+                leaf_pdfs[right_child,1:] = np.copy(best_right_counts_normalized)
+    
+    groups_cu.set(groups)
+
+    group_counts = np.copy(processed_group_counts)
+
+    active_groups = active_next_groups.copy()
+    # print(active_groups)
+    active_next_groups = []
+
+
+
 print('hi')
+# best_gain_feature

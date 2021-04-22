@@ -10,7 +10,7 @@ const int TOTAL_NUM_PIXELS = NUM_IMAGES * IMG_DIM_X * IMG_DIM_Y;
 
 const int NUM_CLASSES = 3;
 
-const int NUM_RANDOM_FEATURES = 16;
+const int NUM_RANDOM_FEATURES = 32;
 
 const int MAX_TREE_DEPTH = 8;
 const int MAX_LEAF_NODES = 256;//2**MAX_TREE_DEPTH;
@@ -19,8 +19,6 @@ const int MAX_LEAF_NODES = 256;//2**MAX_TREE_DEPTH;
 __device__ int get_i(int img_idx, int img_x, int img_y) {
     return (img_idx * IMG_DIM_X * IMG_DIM_Y) + (img_y * IMG_DIM_X) + img_x;
 }
-
-
 
 __device__ uint16 get_pixel(uint16* img, int img_idx, int img_x, int img_y) {
     if (img_x < 0 || img_y < 0 || img_x >= IMG_DIM_X || img_y >= IMG_DIM_Y) {
@@ -61,8 +59,8 @@ __global__ void evaluate_random_features(
         uint16* img_labels,
         uint16* img_depth,
         float* random_features,
-        uint32* groups,
-        uint32* next_groups,
+        int* groups, // int32?? -1 means not active, 
+        int* next_groups,
         uint64* next_groups_counts) {
 
 
@@ -78,10 +76,14 @@ __global__ void evaluate_random_features(
     const int img_y = i_rem / IMG_DIM_X;
     const int img_x = i_rem % IMG_DIM_X;
 
+    const int group = groups[i];
+
+    if (group == -1) { return; }
+
     const uint16 label = get_pixel(img_labels, img_idx, img_x, img_y);
 
     // Dont run training or eval on NONE TYPE.
-    if (label == 0) { return; }
+    // if (label == 0) { return; }
 
     // err... can we get them all at once?
     const float ux = random_features[(j * 5) + 0];
@@ -92,15 +94,11 @@ __global__ void evaluate_random_features(
 
     const float f_val = compute_feature(img_depth, img_idx, int2{img_x, img_y}, float2{ux, uy}, float2{vx, vy});
 
-    
-    const uint32 next_group = (groups[i] * 2) + (f_val < f_thresh ? 0 : 1);
+    const int next_group = (group * 2) + (f_val < f_thresh ? 0 : 1);
 
     const int next_groups_idx = (j * TOTAL_NUM_PIXELS) + i;
     next_groups[next_groups_idx] = next_group;
 
     const int next_group_counts_idx = (j * MAX_LEAF_NODES * NUM_CLASSES) + (next_group * NUM_CLASSES) + label;
     atomicAdd(next_groups_counts + next_group_counts_idx, (uint64)1);
-
-    
-
 };
