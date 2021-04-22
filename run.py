@@ -1,6 +1,18 @@
 import numpy as np
 from PIL import Image
 
+import pycuda.driver as cu
+import pycuda.autoinit
+import pycuda.gpuarray as cu_array
+from pycuda.compiler import SourceModule
+
+cu_file = open('tree_train.cu', 'r')
+cu_text = cu_file.read()
+cu_mod = SourceModule(cu_text)
+
+cu_eval_random_features = cu_mod.get_function('evaluate_random_features')
+# cu_test1 = cu_mod.get_function('test1')
+
 DEPTH = 'depth'
 LABELS = 'labels'
 TEST = 'test'
@@ -115,10 +127,13 @@ def gini_gain2(p, cs):
     return previous - remainder
 
 NUM_TRAIN = 128
-NUM_TEST = 4
+NUM_TEST = 16
 
 # 2 NP arrays of shape (n, y, x), dtype uint16
 test_depth, test_labels = load_data(TEST, NUM_TEST)
+
+test_depth_cu = cu_array.to_gpu(test_depth)
+test_labels_cu = cu_array.to_gpu(test_labels)
 
 num_pixels = NUM_TEST * IMG_DIMS[1] * IMG_DIMS[0]
 
@@ -126,69 +141,78 @@ MAX_TREE_DEPTH = 8
 max_groups = 2**MAX_TREE_DEPTH # decision tree could have this many leaf nodes!
 
 #
-group_counts = np.zeros((max_groups, NUM_CLASSES), dtype=np.int64)
+group_counts = np.zeros((max_groups, NUM_CLASSES), dtype=np.uint64)
 # initialize counts of each class in group 0. Don't keep track of 'NONE' group - we won't even try to classify that group!
 group_counts[0,1:3] = np.unique(test_labels, return_counts=True)[1][1:3]
 
 # each round of training should be a per-pixel operation
 # buffer keeping track of which group each buffer is in
-groups = np.zeros(num_pixels, dtype=np.int32)
+groups = np.zeros(num_pixels, dtype=np.uint32)
 
-NUM_RANDOM_FEATURES_TO_TRY = 8
+groups_cu = cu_array.to_gpu(groups)
 
 
-# proposal_features = [(make_random_feature(), make_random_threshold()) for i in range(NUM_RANDOM_FEATURES_TO_TRY)]
+NUM_RANDOM_FEATURES = 16
+
+
+proposal_features = [(make_random_feature(), make_random_threshold()) for i in range(NUM_RANDOM_FEATURES)]
 # ((u,v),thresh)
-proposal_features = [
-    (([-22799.52010017,  31844.44542072], [-23159.7254717 ,  65518.98616169]), 224.99636734542378),
-    (([  -692.84064766, -50510.43509532], [-54872.58399917, -18403.33368239]), 377.3484252752879),
-    (([42677.79857804, 42241.78039404], [ 12208.86884946, -44481.27711877]), -324.198649832124),
-    (([-13328.76273914,  -4973.62915883], [  -521.67342981, -19904.1950021 ]), 256.12471173659424),
-    (([ 1063.90107223, 74731.37571924], [-29564.23398385, -57884.01713972]), 144.03060763675796),
-    (([ 26590.19023191, -17289.6001013 ], [18140.50055884, 73247.22299132]), 220.399343623307),
-    (([52841.11705466, 47489.93466609], [-77901.91054828, -41492.58656817]), -160.12803605488904),
-    (([-46233.29062441,  72860.17060032], [-44751.44155779,   2178.14506526]), 289.6863955782877)
-]
 
-next_group_counts = np.zeros((NUM_RANDOM_FEATURES_TO_TRY, max_groups, NUM_CLASSES), dtype=np.int64)
-next_groups = np.zeros((NUM_RANDOM_FEATURES_TO_TRY, num_pixels), dtype=np.int32)
-for p_id in range(num_pixels):
-    p_i, p_x, p_y = get_pixel_info(p_id)
-    p_label = read_pixel(test_labels[p_i], (p_x, p_y))
-    # if 'none' label, no pixel there. don't even try to evaluate!
-    if p_label == ID_NONE:
-        pass
-    else:
-        for f in range(NUM_RANDOM_FEATURES_TO_TRY):
-            f_offset, f_thresh = proposal_features[f]
-            f_result = compute_feature(test_depth[p_i], (p_x, p_y), f_offset[0], f_offset[1])
-            if f_result < f_thresh:
-                # left path
-                next_group = (groups[p_id] * 2)
-            else:
-                # right path
-                next_group = (groups[p_id] * 2) + 1
+# proposal_features = [
+#     (([-22799.52010017,  31844.44542072], [-23159.7254717 ,  65518.98616169]), 224.99636734542378),
+#     (([  -692.84064766, -50510.43509532], [-54872.58399917, -18403.33368239]), 377.3484252752879),
+#     (([42677.79857804, 42241.78039404], [ 12208.86884946, -44481.27711877]), -324.198649832124),
+#     (([-13328.76273914,  -4973.62915883], [  -521.67342981, -19904.1950021 ]), 256.12471173659424),
+#     (([ 1063.90107223, 74731.37571924], [-29564.23398385, -57884.01713972]), 144.03060763675796),
+#     (([ 26590.19023191, -17289.6001013 ], [18140.50055884, 73247.22299132]), 220.399343623307),
+#     (([52841.11705466, 47489.93466609], [-77901.91054828, -41492.58656817]), -160.12803605488904),
+#     (([-46233.29062441,  72860.17060032], [-44751.44155779,   2178.14506526]), 289.6863955782877)
+# ]
 
-            next_groups[f, p_id] = next_group
-            next_group_counts[f, next_group, p_label] += 1
+# proposal_features_flat = np.array([
+#     [-22799.52010017,  31844.44542072, -23159.7254717 ,  65518.98616169, 224.99636734542378],
+#     [  -692.84064766, -50510.43509532, -54872.58399917, -18403.33368239, 377.3484252752879],
+#     [42677.79857804, 42241.78039404, 12208.86884946, -44481.27711877, -324.198649832124],
+#     [-13328.76273914,  -4973.62915883, -521.67342981, -19904.1950021 , 256.12471173659424],
+#     [ 1063.90107223, 74731.37571924, -29564.23398385, -57884.01713972, 144.03060763675796],
+#     [ 26590.19023191, -17289.6001013, 18140.50055884, 73247.22299132, 220.399343623307],
+#     [52841.11705466, 47489.93466609, -77901.91054828, -41492.58656817, -160.12803605488904],
+#     [-46233.29062441,  72860.17060032, -44751.44155779,   2178.14506526, 289.6863955782877]
+# ], dtype=np.float32)
 
-"""
-expected_out_counts = np.array([
-    [[244916,  25883], [  5835,    309]],
-    [[246830,  24988], [  3921,   1204]],
-    [[  8049,   2031], [242702,  24161]],
-    [[248269,  25852], [  2482,    340]],
-    [[195454,  18763], [ 55297,   7429]],
-    [[238832,  24910], [ 11919,   1282]],
-    [[ 11582,   4214], [239169,  21978]],
-    [[248306,  22469], [  2445,   3723]]])
-"""
+proposal_features_flat = np.array([(p[0][0][0], p[0][0][1], p[0][1][0], p[0][1][1], p[1]) for p in proposal_features ], dtype=np.float32)
+
+proposal_features_cu = cu_array.to_gpu(proposal_features_flat)
+
+next_group_counts = np.zeros((NUM_RANDOM_FEATURES, max_groups, NUM_CLASSES), dtype=np.int64)
+next_groups = np.zeros((NUM_RANDOM_FEATURES, num_pixels), dtype=np.int32)
+
+next_group_counts_cu = cu_array.to_gpu(next_group_counts)
+next_groups_cu = cu_array.to_gpu(next_groups)
+
+exec_dim_x = num_pixels
+exec_dim_y = NUM_RANDOM_FEATURES
+
+grid_dim = (int(num_pixels / 32) + 1, 1, 1)
+block_dim = (32, NUM_RANDOM_FEATURES, 1)
+
+cu_eval_random_features(
+    test_labels_cu,
+    test_depth_cu,
+    proposal_features_cu,
+    groups_cu,
+    next_groups_cu,
+    next_group_counts_cu,
+    grid=grid_dim, block=block_dim)
+
+next_groups_cu.get(next_groups)
+next_group_counts_cu.get(next_group_counts)
 
 best_gain = 0
-best_gain_f = None
+best_gain_idx = 0
 
 actual_gains = []
-for f in range(NUM_RANDOM_FEATURES_TO_TRY):
+for f in range(NUM_RANDOM_FEATURES):
     start_group_counts = group_counts[0][1:]
     next_group_counts_f = next_group_counts[f,0:2,1:]
     g = gini_gain2(start_group_counts, next_group_counts_f)
@@ -196,17 +220,10 @@ for f in range(NUM_RANDOM_FEATURES_TO_TRY):
     print('gain: ', g)
     if g > best_gain:
         best_gain = g
-        best_gain_f = proposal_features[f]
+        best_gain_idx = f
+        # best_gain_f = proposal_features[f]
 
-expected_gains = np.array([
-    8.898102710525047e-05,
-    0.0007428125288906906,
-    0.000863496483863968,
-    1.3818551075961416e-05,
-    0.00033340808218870754,
-    6.450454232143077e-07,
-    0.0035872638603065277,
-    0.011804347342051935])
-
-assert np.allclose(expected_gains, actual_gains)
-
+best_gain_feature = proposal_features_flat[best_gain_idx]
+print('best gain: ', best_gain)
+print(best_gain_feature)
+print('hi')
