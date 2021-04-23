@@ -94,6 +94,22 @@ __global__ void evaluate_random_features(
     atomicAdd(next_groups_counts + next_group_counts_idx, (uint64)1);
 };
 
+__device__ int get_best_pdf_chance(float* pdf, int num_classes) {
+        
+    float best_pct = 0.f;
+    int best_class = 0;
+
+    for (int j = 0; j < num_classes; j++) {
+        float pct = pdf[j];
+        if (pct > best_pct) {
+            best_pct = pct;
+            best_class = j;
+        }
+    }
+
+    return best_class;
+}
+
 // uses the trained tree to classify all pixels in N images
 __global__ void evaluate_image_using_tree(
         int NUM_IMAGES,
@@ -102,12 +118,11 @@ __global__ void evaluate_image_using_tree(
         int NUM_CLASSES,
         int MAX_TREE_DEPTH,
         uint16* img_in,
-        float* decision_tree, // (MAX_TREE_DEPTH * MAX_LEAF_NODES * 7) => (ux,uy,vx,vy,thresh,l_next,r_next)
-        float* leaf_pdf, // (MAX_LEAF_NODES * NUM_CLASSES)
+        float* decision_tree, // (MAX_TREE_DEPTH * MAX_LEAF_NODES * (7 + NUM_CLASSES + NUM_CLASSES) => (ux,uy,vx,vy,thresh,l_next,r_next,{l_pdf},{r_pdf})
         uint16* labels_out)
 {
     const int2 IMG_DIM{IMG_DIM_X, IMG_DIM_Y};
-    const int MAX_LEAF_NODES = 1 << MAX_TREE_DEPTH; // 2^MAX_TREE_DEPTH (256)
+    const int MAX_LEAF_NODES = 1 << MAX_TREE_DEPTH; // 2^MAX_TREE_DEPTH
     const int TOTAL_NUM_PIXELS = NUM_IMAGES * IMG_DIM.x * IMG_DIM.y;
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -125,9 +140,11 @@ __global__ void evaluate_image_using_tree(
     // current node ID
     int g = 0;
 
+    const int TREE_NODE_ELS = 7 + NUM_CLASSES + NUM_CLASSES;
+
     // should be unrolled??
     for (int j = 0; j < MAX_TREE_DEPTH; j++) {
-        const int decision_tree_base_idx = (j * MAX_LEAF_NODES * 7) + (g * 7);
+        const int decision_tree_base_idx = (j * MAX_LEAF_NODES * TREE_NODE_ELS) + (g * TREE_NODE_ELS);
 
         const float ux = decision_tree[decision_tree_base_idx + 0];
         const float uy = decision_tree[decision_tree_base_idx + 1];
@@ -136,6 +153,8 @@ __global__ void evaluate_image_using_tree(
         const float thresh = decision_tree[decision_tree_base_idx + 4];
         const int l_next = __float2int_rd(decision_tree[decision_tree_base_idx + 5]);
         const int r_next = __float2int_rd(decision_tree[decision_tree_base_idx + 6]);
+        float* l_pdf = decision_tree + (decision_tree_base_idx + 7);
+        float* r_pdf = decision_tree + (decision_tree_base_idx + 7 + NUM_CLASSES);
 
         const float f = compute_feature(img_in, IMG_DIM, img_idx, int2{img_x, img_y}, float2{ux, uy}, float2{vx, vy});
 
@@ -144,7 +163,8 @@ __global__ void evaluate_image_using_tree(
             if (l_next == -1) {
                 g = (g * 2);
             } else {
-                labels_out[i] = l_next;
+                int label = get_best_pdf_chance(l_pdf, NUM_CLASSES);
+                labels_out[i] = (uint16)label;
                 return;
             }
         } else {
@@ -152,26 +172,11 @@ __global__ void evaluate_image_using_tree(
             if (r_next == -1) {
                 g = (g * 2) + 1;
             } else {
-                labels_out[i] = r_next;
+                int label = get_best_pdf_chance(r_pdf, NUM_CLASSES);
+                labels_out[i] = (uint16)label;
                 return;
             }
         }
     }
-
-    // got to end of tree.. pick element in PDF with highest!
-    const int leaf_pdf_start_idx = (g * NUM_CLASSES);
-    
-    float best_pct = 0.f;
-    uint16 best_class = 0;
-
-    for (int j = 0; j < NUM_CLASSES; j++) {
-        float pct = leaf_pdf[leaf_pdf_start_idx + j];
-        if (pct > best_pct) {
-            best_pct = pct;
-            best_class = j;
-        }
-    }
-
-    labels_out[i] = best_class;
 
 }
