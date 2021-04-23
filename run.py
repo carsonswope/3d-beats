@@ -8,12 +8,12 @@ from pycuda.compiler import SourceModule
 
 np.set_printoptions(suppress=True)
 
+# load/compile cuda kernels..
 cu_file = open('tree_train.cu', 'r')
 cu_text = cu_file.read()
 cu_mod = SourceModule(cu_text)
-
 cu_eval_random_features = cu_mod.get_function('evaluate_random_features')
-# cu_test1 = cu_mod.get_function('test1')
+cu_eval_image = cu_mod.get_function('evaluate_image_using_tree')
 
 DEPTH = 'depth'
 LABELS = 'labels'
@@ -58,7 +58,7 @@ def load_data(s, num):
         l_2[np.all(l_1 == COLOR_HAND, axis=2)] = ID_HAND
 
         # all -1s have been replaced
-        assert np.min(l_2) == 0
+        assert np.min(l_2) > -1
         assert np.max(l_2) == 2
 
         all_labels[i,:,:] = l_2
@@ -82,8 +82,6 @@ def read_pixel(i, x):
 # v: offset 2
 def compute_feature(i, x, u, v):
     d_x = read_pixel(i, x)
-    # if d_x == 0:
-        # d_x = 65535
     u_coord = x + (u / d_x)
     v_coord = x + (v / d_x)
     # convert to floats..
@@ -130,16 +128,18 @@ def gini_gain2(p, cs):
     remainder = sum([((c[0] + c[1]) / p_count) * gini_impurity2(c) for c in cs])
     return previous - remainder
 
-NUM_TRAIN = 128
-NUM_TEST = 16
+print('loading training data..')
 
+NUM_TRAIN = 256
 # 2 NP arrays of shape (n, y, x), dtype uint16
-test_depth, test_labels = load_data(TEST, NUM_TEST)
+train_depth, train_labels = load_data(TRAIN, NUM_TRAIN)
 
-test_depth_cu = cu_array.to_gpu(test_depth)
-test_labels_cu = cu_array.to_gpu(test_labels)
+print('training tree..')
 
-num_pixels = NUM_TEST * IMG_DIMS[1] * IMG_DIMS[0]
+train_depth_cu = cu_array.to_gpu(train_depth)
+train_labels_cu = cu_array.to_gpu(train_labels)
+
+num_pixels = NUM_TRAIN * IMG_DIMS[1] * IMG_DIMS[0]
 
 MAX_TREE_DEPTH = 8
 max_groups = 2**MAX_TREE_DEPTH # decision tree could have this many leaf nodes!
@@ -147,12 +147,12 @@ max_groups = 2**MAX_TREE_DEPTH # decision tree could have this many leaf nodes!
 NUM_RANDOM_FEATURES = 32
 
 group_counts = np.zeros((max_groups, NUM_CLASSES), dtype=np.uint64)
-group_counts[0,1:] = np.unique(test_labels, return_counts=True)[1][1:]
+group_counts[0,1:] = np.unique(train_labels, return_counts=True)[1][1:]
 
 # start each pixel part of group -1
-groups = np.ones((NUM_TEST, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.int32) * -1
+groups = np.ones((NUM_TRAIN, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.int32) * -1
 # anything that isn't NO_LABEL (not 0 depth) gets put in group 0 to start
-groups[np.where(test_labels > 0)] = 0
+groups[np.where(train_labels > 0)] = 0
 groups_cu = cu_array.to_gpu(groups)
 
 # empty proposals buffer
@@ -164,14 +164,14 @@ next_group_counts = np.zeros((NUM_RANDOM_FEATURES, max_groups, NUM_CLASSES), dty
 next_group_counts_cu = cu_array.to_gpu(next_group_counts)
 
 # empty 'next groups': for each random 
-next_groups = np.ones((NUM_RANDOM_FEATURES, NUM_TEST, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.int32) * -1
+next_groups = np.ones((NUM_RANDOM_FEATURES, NUM_TRAIN, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.int32) * -1
 next_groups_cu = cu_array.to_gpu(next_groups)
 
 active_groups = [0]
 active_next_groups = []
 
 tree_out = np.zeros((MAX_TREE_DEPTH, max_groups, 7), dtype=np.float32) # ux,uy,vx,vy,thresh,l_class,r_class - if class is set to -1, then evaluation continues!
-leaf_pdfs = np.zeros((max_groups, NUM_CLASSES))
+leaf_pdfs = np.zeros((max_groups, NUM_CLASSES), dtype=np.float32)
 
 for current_level in range(MAX_TREE_DEPTH):
 
@@ -188,15 +188,21 @@ for current_level in range(MAX_TREE_DEPTH):
     next_groups[:,:,:,:] = -1
     next_groups_cu.set(next_groups)
 
-    exec_dim_x = num_pixels
-    exec_dim_y = NUM_RANDOM_FEATURES
+    # exec_dim_x = num_pixels
+    # exec_dim_y = NUM_RANDOM_FEATURES
 
     grid_dim = (int(num_pixels / 32) + 1, 1, 1)
     block_dim = (32, NUM_RANDOM_FEATURES, 1)
 
     cu_eval_random_features(
-        test_labels_cu,
-        test_depth_cu,
+        np.int32(NUM_TRAIN),
+        np.int32(IMG_DIMS[0]),
+        np.int32(IMG_DIMS[1]),
+        np.int32(NUM_RANDOM_FEATURES),
+        np.int32(NUM_CLASSES),
+        np.int32(MAX_TREE_DEPTH),
+        train_labels_cu,
+        train_depth_cu,
         proposal_features_cu,
         groups_cu,
         next_groups_cu,
@@ -221,7 +227,7 @@ for current_level in range(MAX_TREE_DEPTH):
         parent_counts = np.copy(group_counts[parent_group][1:])
 
         # check reach random feature for the performance of X group ID
-        best_g = 0
+        best_g = -1
         best_g_idx = None
         best_left_counts = None
         best_right_counts = None
@@ -288,14 +294,92 @@ for current_level in range(MAX_TREE_DEPTH):
                 leaf_pdfs[right_child,1:] = np.copy(best_right_counts_normalized)
     
     groups_cu.set(groups)
-
     group_counts = np.copy(processed_group_counts)
-
     active_groups = active_next_groups.copy()
-    # print(active_groups)
     active_next_groups = []
 
+print('tree training done..')
 
+print('beginnign evaluation..')
 
-print('hi')
-# best_gain_feature
+NUM_TEST = 16
+# 2 NP arrays of shape (n, y, x), dtype uint16
+test_depth, test_labels = load_data(TRAIN, NUM_TEST) # just use training data for now - generate dedicated test data shortly
+
+test_output_labels = np.zeros((NUM_TEST, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.uint16)
+test_output_labels_cu = cu_array.to_gpu(test_output_labels)
+
+test_depth_cu = cu_array.to_gpu(test_depth)
+tree_out_cu = cu_array.to_gpu(tree_out)
+leaf_pdfs_cu = cu_array.to_gpu(leaf_pdfs)
+
+num_test_pixels = NUM_TEST * IMG_DIMS[1] * IMG_DIMS[0]
+
+grid_dim = (int(num_test_pixels / 256) + 1, 1, 1)
+block_dim = (256, 1, 1)
+
+cu_eval_image(
+    np.int32(NUM_TEST),
+    np.int32(IMG_DIMS[0]),
+    np.int32(IMG_DIMS[1]),
+    np.int32(NUM_CLASSES),
+    np.int32(MAX_TREE_DEPTH),
+    test_depth_cu,
+    tree_out_cu,
+    leaf_pdfs_cu,
+    test_output_labels_cu,
+    grid=grid_dim, block=block_dim)
+
+test_output_labels_cu.get(test_output_labels)
+
+"""
+# tree out, leaf pdfs
+def eval_pixel(img, pixel_x, pixel_y, decision_tree, leaf_pdfs):
+    group = 0
+    for i in range(MAX_TREE_DEPTH):
+        criteria = decision_tree[i][group]
+        p = np.array([pixel_x, pixel_y])
+        u = np.array([criteria[0], criteria[1]])
+        v = np.array([criteria[2], criteria[3]])
+        f = compute_feature(img, p, u, v)
+        thresh = criteria[4]
+
+        if f < thresh:
+            # left
+            next_group = int(criteria[5])
+            if next_group == -1:
+                group = (group * 2)
+            else:
+                # known output!
+                out_pdf = np.zeros(NUM_CLASSES, dtype=np.float32)
+                out_pdf[next_group] = 1.
+                return out_pdf
+        else:
+            next_group = int(criteria[6])
+            if next_group == -1:
+                group = (group * 2) + 1
+            else:
+                # known output!
+                out_pdf = np.zeros(NUM_CLASSES, dtype=np.float32)
+                out_pdf[next_group] = 1.
+                return out_pdf
+
+    return np.copy(leaf_pdfs[group])
+"""
+
+test_output_labels_render = np.zeros((NUM_TEST, IMG_DIMS[1], IMG_DIMS[0], 4), dtype='uint8')
+test_output_labels_render[np.where(test_output_labels == ID_TABLE)] = COLOR_TABLE
+test_output_labels_render[np.where(test_output_labels == ID_HAND)] = COLOR_HAND
+
+for i in range(NUM_TEST):
+    out_labels_img = test_output_labels_render[i]
+    im = Image.fromarray(out_labels_img)
+    im.save('evals/eval_labels_' + str(i).zfill(8) + '.png')
+
+# px = eval_pixel(train_depth[0], 214, 179, tree_out, leaf_pdfs)
+# print('hand', px)
+
+# pz = eval_pixel(train_depth[0], 288, 198, tree_out, leaf_pdfs)
+# print('table', pz)
+
+# print('uhh')

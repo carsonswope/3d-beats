@@ -2,3 +2,4 @@ build
 datagen/generated
 *.blend1
 .vscode
+evals
