@@ -92,7 +92,7 @@ def compute_feature(i, x, u, v):
 # feature is simply a set of xy offsets
 def make_random_offset():
     f_theta = np.random.uniform(0, np.pi*2)
-    magnitude = np.random.uniform(0, 100000)
+    magnitude = np.random.uniform(0, 500000)
     return np.array([np.cos(f_theta), np.sin(f_theta)]) * magnitude
 
 def make_random_feature():
@@ -115,8 +115,7 @@ def get_pixel_info(pixel_id):
 def gini_impurity2(c):
     # c = (num0, num1)
     # counts of class0 and class1 in set
-    if c[0] + c[1] == 0:
-        print('u')
+    assert c[0] + c[1] > 0
     p = c[0] / (c[0] + c[1])
     return 2 * p * (1-p)
 
@@ -130,7 +129,7 @@ def gini_gain2(p, cs):
 
 print('loading training data..')
 
-NUM_TRAIN = 256
+NUM_TRAIN = 64
 # 2 NP arrays of shape (n, y, x), dtype uint16
 train_depth, train_labels = load_data(TRAIN, NUM_TRAIN)
 
@@ -141,7 +140,7 @@ train_labels_cu = cu_array.to_gpu(train_labels)
 
 num_pixels = NUM_TRAIN * IMG_DIMS[1] * IMG_DIMS[0]
 
-MAX_TREE_DEPTH = 8
+MAX_TREE_DEPTH = 10
 max_groups = 2**MAX_TREE_DEPTH # decision tree could have this many leaf nodes!
 
 NUM_RANDOM_FEATURES = 32
@@ -187,9 +186,6 @@ for current_level in range(MAX_TREE_DEPTH):
     # reset next groups
     next_groups[:,:,:,:] = -1
     next_groups_cu.set(next_groups)
-
-    # exec_dim_x = num_pixels
-    # exec_dim_y = NUM_RANDOM_FEATURES
 
     grid_dim = (int(num_pixels / 32) + 1, 1, 1)
     block_dim = (32, NUM_RANDOM_FEATURES, 1)
@@ -250,6 +246,12 @@ for current_level in range(MAX_TREE_DEPTH):
                 best_right_counts = np.copy(right_counts)
 
         assert np.all(best_right_counts + best_left_counts == parent_counts)
+
+        # not a single random feature provided any gain!
+        if best_g == 0:
+            parent_counts_normalized = parent_counts / np.sum(parent_counts)
+            # this edge case still needs to be handled somehow
+            print('error!!')
         
         # current tree level / current tree node idx
         tree_out[current_level][parent_group][0:5] = np.copy(proposal_features_flat[best_g_idx])
@@ -370,6 +372,14 @@ def eval_pixel(img, pixel_x, pixel_y, decision_tree, leaf_pdfs):
 test_output_labels_render = np.zeros((NUM_TEST, IMG_DIMS[1], IMG_DIMS[0], 4), dtype='uint8')
 test_output_labels_render[np.where(test_output_labels == ID_TABLE)] = COLOR_TABLE
 test_output_labels_render[np.where(test_output_labels == ID_HAND)] = COLOR_HAND
+
+matching_pixels = np.sum(test_output_labels == test_labels)
+sh = test_output_labels.shape
+total_test_pixels = sh[0] * sh[1] * sh[2]
+pct_match = matching_pixels / total_test_pixels
+
+print('pct. matching pixels: ', pct_match)
+print('saving renders..')
 
 for i in range(NUM_TEST):
     out_labels_img = test_output_labels_render[i]

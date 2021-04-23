@@ -2,11 +2,6 @@ typedef unsigned short uint16;
 typedef unsigned int uint32;
 typedef unsigned long long uint64;
 
-// const int NUM_CLASSES = 3;
-
-// const int MAX_TREE_DEPTH = 8;
-
-
 __device__ int get_i(int img_idx, const int2 IMG_DIM, int img_x, int img_y) {
     return (img_idx * IMG_DIM.x * IMG_DIM.y) + (img_y * IMG_DIM.x) + img_x;
 }
@@ -165,41 +160,12 @@ __global__ void evaluate_image_using_tree(
 
     // got to end of tree.. pick element in PDF with highest!
     const int leaf_pdf_start_idx = (g * NUM_CLASSES);
-
-    // labels_out[i] = 69;
-
-    // labels_out[i] = (uint16)g;
-
-    
-    // float pct_sum = 0.;
-    // for (int k = 0; k < NUM_CLASSES; k++) {
-    //     float s = leaf_pdf[(g * NUM_CLASSES) + k];
-    //     pct_sum += 0.3333f;
-    // }
-
-    // if (pct_sum > 1.01f || pct_sum < 0.99f) {
-    //     labels_out[i] = 69;
-    // } else {
-    //     labels_out[i] = 55;
-    // }
-    // */
-
-    // float s1 = leaf_pdf[(g * NUM_CLASSES) + 1];
-    // float s2 = leaf_pdf[(g * NUM_CLASSES) + 2];
-    // float s_sum = s1 + s2;
-
-    // if (s_sum < 0.7 || s_sum > 1.3) {
-    //     labels_out[i] = 69;
-    // } else {
-    //     labels_out[i] = 55;
-    // }
     
     float best_pct = 0.f;
     uint16 best_class = 0;
-    // float pct_sum = 0.;
+
     for (int j = 0; j < NUM_CLASSES; j++) {
         float pct = leaf_pdf[leaf_pdf_start_idx + j];
-        // pct_sum += pct;
         if (pct > best_pct) {
             best_pct = pct;
             best_class = j;
@@ -207,14 +173,5 @@ __global__ void evaluate_image_using_tree(
     }
 
     labels_out[i] = best_class;
-
-    // if (pct_sum > 1.01f || pct_sum < 0.99f) {
-    //     labels_out[i] = 69;
-    // } else {
-    //     labels_out[i] = 55;
-    // }
-    
-
-    // labels_out[i] = best_class;
 
 }
