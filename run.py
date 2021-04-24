@@ -150,38 +150,42 @@ train_labels_cu = cu_array.to_gpu(train_labels)
 num_pixels = NUM_TRAIN * IMG_DIMS[1] * IMG_DIMS[0]
 
 MAX_TREE_DEPTH = 10
-max_groups = 2**MAX_TREE_DEPTH # decision tree could have this many leaf nodes!
+max_nodes = 2**MAX_TREE_DEPTH # decision tree could have this many leaf nodes!
 
 NUM_RANDOM_FEATURES = 32
 
-group_counts = np.zeros((max_groups, NUM_CLASSES), dtype=np.uint64)
-group_counts[0,1:] = np.unique(train_labels, return_counts=True)[1][1:]
+node_counts = np.zeros((max_nodes, NUM_CLASSES), dtype=np.uint64)
+node_counts[0,1:] = np.unique(train_labels, return_counts=True)[1][1:]
 
 # start each pixel part of group -1
-groups = np.ones((NUM_TRAIN, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.int32) * -1
+nodes_by_pixel = np.ones((NUM_TRAIN, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.int32) * -1
 # anything that isn't NO_LABEL (not 0 depth) gets put in group 0 to start
-groups[np.where(train_labels > 0)] = 0
-groups_cu = cu_array.to_gpu(groups)
+nodes_by_pixel[np.where(train_labels > 0)] = 0
+nodes_by_pixel_cu = cu_array.to_gpu(nodes_by_pixel)
 
 # empty proposals buffer
 proposal_features_flat = np.zeros((NUM_RANDOM_FEATURES, 5), dtype=np.float32)
 proposal_features_cu = cu_array.to_gpu(proposal_features_flat)
 
 # empty 'next group counts'
-next_group_counts = np.zeros((NUM_RANDOM_FEATURES, max_groups, NUM_CLASSES), dtype=np.uint64)
-next_group_counts_cu = cu_array.to_gpu(next_group_counts)
+next_node_counts = np.zeros((NUM_RANDOM_FEATURES, max_nodes, NUM_CLASSES), dtype=np.uint64)
+next_node_counts_cu = cu_array.to_gpu(next_node_counts)
 
 # empty 'next groups': for each random 
-next_groups = np.ones((NUM_RANDOM_FEATURES, NUM_TRAIN, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.int32) * -1
-next_groups_cu = cu_array.to_gpu(next_groups)
+next_nodes_by_pixel = np.ones((NUM_RANDOM_FEATURES, NUM_TRAIN, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.int32) * -1
+next_nodes_by_pixel_cu = cu_array.to_gpu(next_nodes_by_pixel)
 
-active_groups = [0]
-active_next_groups = []
+active_nodes = []
+active_next_nodes = [0]
 
 TREE_NODE_ELS = 7 + (NUM_CLASSES * 2)
-tree_out = np.zeros((MAX_TREE_DEPTH, max_groups, TREE_NODE_ELS), dtype=np.float32) # ux,uy,vx,vy,thresh,l_flag(0 or -1),r_flag(0 or -1),l_pdf(used if l_flag == 0),r_pdf(used if r_flag == 0)
+tree_out = np.zeros((MAX_TREE_DEPTH, max_nodes, TREE_NODE_ELS), dtype=np.float32) # ux,uy,vx,vy,thresh,l_flag(0 or -1),r_flag(0 or -1),l_pdf(used if l_flag == 0),r_pdf(used if r_flag == 0)
 
 for current_level in range(MAX_TREE_DEPTH):
+
+    nodes_by_pixel_cu.set(nodes_by_pixel)
+    active_nodes = active_next_nodes.copy()
+    active_next_nodes = []
 
     # make list of random features
     proposal_features = [(make_random_feature(), make_random_threshold()) for i in range(NUM_RANDOM_FEATURES)]
@@ -189,12 +193,12 @@ for current_level in range(MAX_TREE_DEPTH):
     proposal_features_cu.set(proposal_features_flat)
 
     # reset next group counts
-    next_group_counts[:,:,:] = 0
-    next_group_counts_cu.set(next_group_counts)
+    next_node_counts[:,:,:] = 0
+    next_node_counts_cu.set(next_node_counts)
 
     # reset next groups
-    next_groups[:,:,:,:] = -1
-    next_groups_cu.set(next_groups)
+    next_nodes_by_pixel[:,:,:,:] = -1
+    next_nodes_by_pixel_cu.set(next_nodes_by_pixel)
 
     grid_dim = (int(num_pixels / 32) + 1, 1, 1)
     block_dim = (32, NUM_RANDOM_FEATURES, 1)
@@ -209,37 +213,38 @@ for current_level in range(MAX_TREE_DEPTH):
         train_labels_cu,
         train_depth_cu,
         proposal_features_cu,
-        groups_cu,
-        next_groups_cu,
-        next_group_counts_cu,
+        nodes_by_pixel_cu,
+        next_nodes_by_pixel_cu,
+        next_node_counts_cu,
         grid=grid_dim, block=block_dim)
 
-    next_groups_cu.get(next_groups)
-    next_group_counts_cu.get(next_group_counts)
+    next_nodes_by_pixel_cu.get(next_nodes_by_pixel)
+    next_node_counts_cu.get(next_node_counts)
 
     # reset all groups. will be re-set when evaluating results of kernel
-    groups[:] = -1
+    nodes_by_pixel[:] = -1
 
-    processed_group_counts = np.zeros((max_groups, NUM_CLASSES), dtype=np.uint64)
+    processed_node_counts = np.zeros((max_nodes, NUM_CLASSES), dtype=np.uint64)
 
-    for parent_group in active_groups:
-        if parent_group == -1:
+    for parent_node in active_nodes:
+        if parent_node == -1:
+            print('shouldnhapen?')
             continue
 
-        left_child = parent_group * 2
-        right_child = (parent_group * 2) + 1
+        left_child = parent_node * 2
+        right_child = (parent_node * 2) + 1
 
-        parent_counts = np.copy(group_counts[parent_group][1:])
+        parent_counts = np.copy(node_counts[parent_node][1:])
 
-        # check reach random feature for the performance of X group ID
+        # check reach random feature for the performance of X node ID
         best_g = -1
         best_g_idx = None
         best_left_counts = None
         best_right_counts = None
 
         for f in range(NUM_RANDOM_FEATURES):
-            left_counts = next_group_counts[f][left_child][1:]
-            right_counts = next_group_counts[f][right_child][1:]
+            left_counts = next_node_counts[f][left_child][1:]
+            right_counts = next_node_counts[f][right_child][1:]
 
             assert np.sum(left_counts) + np.sum(right_counts) == np.sum(parent_counts)
 
@@ -257,22 +262,22 @@ for current_level in range(MAX_TREE_DEPTH):
         assert np.all(best_right_counts + best_left_counts == parent_counts)
 
         # current tree level / current tree node idx
-        tree_out[current_level][parent_group][0:5] = np.copy(proposal_features_flat[best_g_idx])
+        tree_out[current_level][parent_node][0:5] = np.copy(proposal_features_flat[best_g_idx])
 
-        left_group_pixels = np.where(next_groups[best_g_idx] == left_child)
-        right_group_pixels = np.where(next_groups[best_g_idx] == right_child)
+        left_node_pixels = np.where(next_nodes_by_pixel[best_g_idx] == left_child)
+        right_node_pixels = np.where(next_nodes_by_pixel[best_g_idx] == right_child)
         
-        assert left_group_pixels[0].shape[0] + right_group_pixels[0].shape[0] == np.sum(parent_counts)
+        assert left_node_pixels[0].shape[0] + right_node_pixels[0].shape[0] == np.sum(parent_counts)
 
         # not a single random feature provided any gain!
         # this node is a leaf node now
         if best_g == 0:
             parent_counts_normalized = parent_counts / np.sum(parent_counts)
             # L and R are both leaf nodes. Write PDFs
-            tree_out[current_level][parent_group][5] = 0
-            tree_out[current_level][parent_group][6] = 0
-            tree_out[current_level][parent_group][7+1:7+NUM_CLASSES] = np.copy(parent_counts_normalized)
-            tree_out[current_level][parent_group][7+NUM_CLASSES+1:7+NUM_CLASSES+NUM_CLASSES] = np.copy(parent_counts_normalized)
+            tree_out[current_level][parent_node][5] = 0
+            tree_out[current_level][parent_node][6] = 0
+            tree_out[current_level][parent_node][7+1:7+NUM_CLASSES] = np.copy(parent_counts_normalized)
+            tree_out[current_level][parent_node][7+NUM_CLASSES+1:7+NUM_CLASSES+NUM_CLASSES] = np.copy(parent_counts_normalized)
 
         else:
 
@@ -282,40 +287,37 @@ for current_level in range(MAX_TREE_DEPTH):
             best_left_counts_normalized = best_left_counts / np.sum(best_left_counts)
             if np.any(best_left_counts_normalized > CUTOFF_THRESH):
                 out_class = np.where(best_left_counts_normalized > CUTOFF_THRESH)[0][0] + 1 # add one because first element in array was removed before
-                tree_out[current_level][parent_group][5] = 0
-                tree_out[current_level][parent_group][7 + out_class] = 1 
+                tree_out[current_level][parent_node][5] = 0
+                tree_out[current_level][parent_node][7 + out_class] = 1 
             else:
                 if current_level == MAX_TREE_DEPTH - 1:
-                    tree_out[current_level][parent_group][5] = 0
-                    tree_out[current_level][parent_group][7+1:7+NUM_CLASSES] = np.copy(best_left_counts_normalized)
+                    tree_out[current_level][parent_node][5] = 0
+                    tree_out[current_level][parent_node][7+1:7+NUM_CLASSES] = np.copy(best_left_counts_normalized)
                 else:
-                    tree_out[current_level][parent_group][5] = -1
+                    tree_out[current_level][parent_node][5] = -1
 
-                    groups[left_group_pixels] = left_child
-                    active_next_groups.append(left_child)
-                    processed_group_counts[left_child][1:] = np.copy(best_left_counts)
+                    nodes_by_pixel[left_node_pixels] = left_child
+                    active_next_nodes.append(left_child)
+                    processed_node_counts[left_child][1:] = np.copy(best_left_counts)
 
             # determine right node
             best_right_counts_normalized = best_right_counts / np.sum(best_right_counts)
             if np.any(best_right_counts_normalized > CUTOFF_THRESH):
                 out_class = np.where(best_right_counts_normalized > CUTOFF_THRESH)[0][0] + 1
-                tree_out[current_level][parent_group][6] = 0
-                tree_out[current_level][parent_group][7+NUM_CLASSES + out_class] = 1
+                tree_out[current_level][parent_node][6] = 0
+                tree_out[current_level][parent_node][7+NUM_CLASSES + out_class] = 1
             else:
                 if current_level == MAX_TREE_DEPTH - 1:
-                    tree_out[current_level][parent_group][6] = 0
-                    tree_out[current_level][parent_group][7+NUM_CLASSES+1:7+NUM_CLASSES+NUM_CLASSES] = np.copy(best_right_counts_normalized)
+                    tree_out[current_level][parent_node][6] = 0
+                    tree_out[current_level][parent_node][7+NUM_CLASSES+1:7+NUM_CLASSES+NUM_CLASSES] = np.copy(best_right_counts_normalized)
                 else:
-                    tree_out[current_level][parent_group][6] = -1
+                    tree_out[current_level][parent_node][6] = -1
 
-                    groups[right_group_pixels] = right_child
-                    active_next_groups.append(right_child)
-                    processed_group_counts[right_child][1:] = np.copy(best_right_counts)
+                    nodes_by_pixel[right_node_pixels] = right_child
+                    active_next_nodes.append(right_child)
+                    processed_node_counts[right_child][1:] = np.copy(best_right_counts)
     
-    groups_cu.set(groups)
-    group_counts = np.copy(processed_group_counts)
-    active_groups = active_next_groups.copy()
-    active_next_groups = []
+    node_counts = np.copy(processed_node_counts)
 
 print('tree training done..')
 
