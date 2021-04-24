@@ -6,14 +6,23 @@ import pycuda.autoinit
 import pycuda.gpuarray as cu_array
 from pycuda.compiler import SourceModule
 
+import os
+
 np.set_printoptions(suppress=True)
 
 # load/compile cuda kernels..
 cu_file = open('tree_train.cu', 'r')
 cu_text = cu_file.read()
-cu_mod = SourceModule(cu_text)
-cu_eval_random_features = cu_mod.get_function('evaluate_random_features')
-cu_eval_image = cu_mod.get_function('evaluate_image_using_tree')
+try:
+    cu_mod = SourceModule(cu_text, no_extern_c=True, include_dirs=[os.getcwd()])
+    cu_eval_random_features = cu_mod.get_function('evaluate_random_features')
+    cu_eval_image = cu_mod.get_function('evaluate_image_using_tree')
+except Exception as e:
+    print('error:')
+    print(e.msg)
+    print(e.stdout)
+    print(e.stderr)
+    exit()
 
 DEPTH = 'depth'
 LABELS = 'labels'
