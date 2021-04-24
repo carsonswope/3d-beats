@@ -78,7 +78,7 @@ void evaluate_random_features(
 
     uint64* next_nodes_counts_ptr = next_nodes_counts.get_ptr({j, next_node, label});
     atomicAdd(next_nodes_counts_ptr, (uint64)1);
-};}
+}}
 
 
 __device__ int get_best_pdf_chance(float* pdf, int num_classes) {
@@ -98,8 +98,8 @@ __device__ int get_best_pdf_chance(float* pdf, int num_classes) {
 }
 
 // uses the trained tree to classify all pixels in N images
-extern "C" {
-__global__ void evaluate_image_using_tree(
+extern "C" {__global__
+    void evaluate_image_using_tree(
         int NUM_IMAGES,
         int IMG_DIM_X,
         int IMG_DIM_Y,
@@ -171,5 +171,216 @@ __global__ void evaluate_image_using_tree(
         }
     }
 
+}}
+
+__device__ uint64 node_counts_sum(uint64* p, const int num_classes) {
+    uint64 s = 0;
+    for (int i = 0; i < num_classes; i++) s += p[i];
+    return s;
 }
+
+__device__ float gini_impurity(uint64* c, const int num_classes) {
+    // Assumptions for 3-class case where 0 alwasy has 0 count
+    assert(num_classes == 3);
+    assert(c[0] == 0.f);
+    assert(c[1] + c[2] > 0.);
+
+    float p = (c[1] * 1.f) / (c[1] + c[2]);
+    return 2.f * p * (1.f - p);
 }
+
+__device__ float gini_gain(uint64* p_counts, uint64* l_counts, uint64* r_counts, const int num_classes) {
+    assert(num_classes == 3);
+    assert(p_counts[0] == 0.f);
+    float p_sum = p_counts[1] + p_counts[2];
+    float p_impurity = gini_impurity(p_counts, num_classes);
+    float remainder =
+        ((node_counts_sum(l_counts, num_classes) / p_sum) * gini_impurity(l_counts, num_classes)) +
+        ((node_counts_sum(r_counts, num_classes) / p_sum) * gini_impurity(r_counts, num_classes));
+    return p_impurity - remainder;
+}
+
+// if any one group has N pct of the sum, return group ID. else return -1
+__device__ int count_above_cutoff(uint64* counts, const int num_classes, const uint64 sum, const float cutoff) {
+    for (int i =0; i < num_classes; i++) {
+        if (counts[i] * 1.f / sum >= cutoff) return i;
+    }
+    return -1;
+}
+
+extern __shared__ float best_g[];
+
+extern "C" {__global__
+void pick_best_features(
+        int NUM_ACTIVE_NODES,
+        int NUM_RANDOM_FEATURES,
+        int MAX_TREE_DEPTH,
+        int NUM_CLASSES,
+        int CURRENT_TREE_LEVEL,
+        int* active_nodes,
+        uint64* _parent_node_counts,
+        uint64* _child_node_counts_by_feature, // per random feature!
+        float* _random_features,
+        float* _tree_out,
+        uint64* _child_node_counts, // not by feature! - after we picked the best feature!
+        int* next_active_nodes,
+        int* num_next_active_nodes,
+        int* selected_features_map // per parent node: record which feature idx was selected
+    ) {
+
+    // i: active node idx
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (i >= NUM_ACTIVE_NODES) return;
+
+    const int TREE_NODE_ELS = 7 + (NUM_CLASSES * 2);
+    const int MAX_NODES = 1 << MAX_TREE_DEPTH; // 2^MAX_TREE_DEPTH
+    Array2d<uint64> parent_node_counts(_parent_node_counts, {MAX_NODES, NUM_CLASSES});
+    Array3d<uint64> child_node_counts_by_feature(_child_node_counts_by_feature, {NUM_RANDOM_FEATURES, MAX_NODES, NUM_CLASSES});
+    Array2d<float> random_features(_random_features, {NUM_RANDOM_FEATURES, 5}); // (ux,uy,vx,vy,thresh)
+    Array3d<float> tree_out(_tree_out, {MAX_TREE_DEPTH, MAX_NODES, TREE_NODE_ELS});
+
+    Array2d<uint64> child_node_counts(_child_node_counts, {MAX_NODES, NUM_CLASSES});
+
+    const int parent_node = active_nodes[i];
+
+    const int left_child_node = (parent_node * 2);
+    const int right_child_node = (parent_node * 2) + 1;
+
+    uint64* parent_node_counts_ptr = parent_node_counts.get_ptr({parent_node, 0});
+    const uint64 parent_nodes_sum = node_counts_sum(parent_node_counts_ptr, NUM_CLASSES);
+
+    float best_g = -1.;
+    int best_g_feature_id = 0;
+    uint64* best_left_counts_ptr = nullptr;
+    uint64* best_right_counts_ptr = nullptr;
+
+    for (int j = 0; j < NUM_RANDOM_FEATURES; j++) {
+
+        uint64* left_child_counts_ptr = child_node_counts_by_feature.get_ptr({j, left_child_node, 0});
+        uint64* right_child_counts_ptr = child_node_counts_by_feature.get_ptr({j, right_child_node, 0});
+    
+        // debug!
+        // verify sums match
+        const uint64 left_nodes_sum = node_counts_sum(left_child_counts_ptr, NUM_CLASSES);
+        const uint64 right_nodes_sum = node_counts_sum(right_child_counts_ptr, NUM_CLASSES);
+        assert(left_nodes_sum + right_nodes_sum == parent_nodes_sum);
+        //
+        float g = (!left_nodes_sum || !right_nodes_sum) ?
+            0. :
+            gini_gain(parent_node_counts_ptr, left_child_counts_ptr, right_child_counts_ptr, NUM_CLASSES);
+
+        if (g > best_g) {
+            best_g = g;
+            best_g_feature_id = j;
+            best_left_counts_ptr = left_child_counts_ptr;
+            best_right_counts_ptr = right_child_counts_ptr;
+        }
+    }
+
+    selected_features_map[parent_node] = best_g_feature_id;
+
+    const uint64 best_left_counts_sum = node_counts_sum(best_left_counts_ptr, NUM_CLASSES);
+    const uint64 best_right_counts_sum  = node_counts_sum(best_right_counts_ptr, NUM_CLASSES);
+
+    // debug again..
+    assert(best_left_counts_sum + best_right_counts_sum == parent_nodes_sum);
+
+    // copy selected proposal!
+    float* tree_out_ptr = tree_out.get_ptr({CURRENT_TREE_LEVEL, parent_node, 0});
+    float* proposal_ptr = random_features.get_ptr({best_g_feature_id, 0});
+    memcpy(tree_out_ptr, proposal_ptr, sizeof(float) * 5);
+
+    // no proposal provided any gain..
+    // both L and R are end nodes, with learned PDF from parent for both.
+    if (best_g <= 0.) {
+        tree_out_ptr[5] = 0.;
+        tree_out_ptr[6] = 0.;
+        for (int k= 0; k < NUM_CLASSES; k++) {
+            const float p = (parent_node_counts_ptr[k] * 1.f) / parent_nodes_sum;
+            tree_out_ptr[7+k] = p;
+            tree_out_ptr[7+NUM_CLASSES+k] = p;
+        }
+        return;
+    }
+
+    const float CUTOFF_THRESH = 0.999f;
+
+    const int l_cutoff = count_above_cutoff(best_left_counts_ptr, NUM_CLASSES, best_left_counts_sum, CUTOFF_THRESH);
+    if (l_cutoff > -1) {
+        tree_out_ptr[5] = 0.;
+        tree_out_ptr[7 + l_cutoff] = 1.;
+    } else {
+        if (CURRENT_TREE_LEVEL == MAX_TREE_DEPTH - 1) {
+            tree_out_ptr[5] = 0.;
+            for (int n = 0; n < NUM_CLASSES; n++) {
+                tree_out_ptr[7+n] = (best_left_counts_ptr[n] * 1.f) / best_left_counts_sum;
+            }
+        } else {
+            tree_out_ptr[5] = -1;
+            // still going! add to next!
+            next_active_nodes[atomicAdd(num_next_active_nodes, 1)] = left_child_node;
+            memcpy(child_node_counts.get_ptr({left_child_node, 0}), best_left_counts_ptr, sizeof(uint64) * NUM_CLASSES);
+        }
+    }
+
+    const int r_cutoff = count_above_cutoff(best_right_counts_ptr, NUM_CLASSES, best_right_counts_sum, CUTOFF_THRESH);
+    if (r_cutoff > -1) {
+        tree_out_ptr[6] = 0.;
+        tree_out_ptr[7 + NUM_CLASSES + r_cutoff] = 1.;
+    } else {
+        if (CURRENT_TREE_LEVEL == MAX_TREE_DEPTH - 1) {
+            tree_out_ptr[6] = 0.;
+            for (int n = 0; n < NUM_CLASSES; n++) {
+                tree_out_ptr[7 + NUM_CLASSES + n] = (best_right_counts_ptr[n] * 1.f) / best_right_counts_sum;
+            }
+        } else {
+            tree_out_ptr[6] = -1;
+            // still going! add to next!
+            next_active_nodes[atomicAdd(num_next_active_nodes, 1)] = right_child_node;
+            memcpy(child_node_counts.get_ptr({right_child_node, 0}), best_right_counts_ptr, sizeof(uint64) * NUM_CLASSES);
+        }
+    }
+}}
+
+
+extern "C" {__global__
+void copy_pixel_groups(
+        int NUM_PIXELS,
+        int NUM_RANDOM_FEATURES,
+        int CURRENT_TREE_LEVEL,
+        int MAX_TREE_DEPTH,
+        int MAX_TREE_NODES,
+        int NUM_CLASSES,
+        int* nodes_by_pixel, // int32?? -1 means not active,
+        int* _next_nodes_by_pixel_by_random_feature,
+        int* random_feature_by_node_map,
+        int* next_nodes_by_pixel,
+        float* _tree_so_far) {
+
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= NUM_PIXELS) return;
+
+    const int i_parent_node = nodes_by_pixel[i];
+    // pixel inactive: no need to copy anything
+    if (i_parent_node == -1) return;
+
+    // pixel active.. which feature was chosen for the node it was part of?
+    const int feature_idx = random_feature_by_node_map[i_parent_node];
+    assert(feature_idx > -1);
+
+    Array2d<int> next_nodes_by_pixel_by_random_feature(_next_nodes_by_pixel_by_random_feature, {NUM_RANDOM_FEATURES, NUM_PIXELS});
+    const int i_child_node = next_nodes_by_pixel_by_random_feature.get({feature_idx, i});
+
+    const int is_left_node = i_child_node == i_parent_node * 2;
+    if (!is_left_node) { assert(i_child_node == i_parent_node * 2 + 1); }
+
+    const int TREE_NODE_ELS = 7 + (NUM_CLASSES * 2);
+    Array3d<float> tree_so_far(_tree_so_far, {MAX_TREE_DEPTH, MAX_TREE_NODES, TREE_NODE_ELS });
+
+    const int branch_status = __float2int_rd(tree_so_far.get({CURRENT_TREE_LEVEL, i_parent_node, is_left_node ? 5 : 6}));
+    if (branch_status != -1) return;
+
+    // This means the branch is still going!
+    next_nodes_by_pixel[i] = i_child_node;
+}}
