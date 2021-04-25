@@ -40,7 +40,7 @@ void evaluate_random_features(
         uint64* _next_nodes_counts) {
 
     const int2 IMG_DIM{IMG_DIM_X, IMG_DIM_Y};
-    const int MAX_LEAF_NODES = 1 << MAX_TREE_DEPTH; // 2^MAX_TREE_DEPTH (256)
+    const int MAX_LEAF_NODES = 1 << (MAX_TREE_DEPTH);
     const int TOTAL_NUM_PIXELS = NUM_IMAGES * IMG_DIM.x * IMG_DIM.y;
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
@@ -73,6 +73,7 @@ void evaluate_random_features(
     const float f_val = compute_feature(img_depth, img_idx, {img_x, img_y}, u, v);
     const int next_node = (node * 2) + (f_val < f_thresh ? 0 : 1);
 
+    assert(next_node < MAX_LEAF_NODES);
     uint64* next_nodes_counts_ptr = next_nodes_counts.get_ptr({j, next_node, label});
     atomicAdd(next_nodes_counts_ptr, (uint64)1);
 }}
@@ -108,7 +109,6 @@ extern "C" {__global__
 {
 
     const int2 IMG_DIM{IMG_DIM_X, IMG_DIM_Y};
-    const int MAX_LEAF_NODES = 1 << MAX_TREE_DEPTH; // 2^MAX_TREE_DEPTH
     const int TOTAL_NUM_PIXELS = NUM_IMAGES * IMG_DIM.x * IMG_DIM.y;
     const int TREE_NODE_ELS = 7 + NUM_CLASSES + NUM_CLASSES; // (ux,uy,vx,vy,thresh,l_next,r_next,{l_pdf},{r_pdf})
 
@@ -122,7 +122,8 @@ extern "C" {__global__
 
     Array3d<uint16> img_in(_img_in, {NUM_IMAGES,IMG_DIM_Y,IMG_DIM_X});
     Array3d<uint16> labels_out(_labels_out, {NUM_IMAGES,IMG_DIM_Y,IMG_DIM_X});
-    Array3d<float> decision_tree_w(decision_tree, {MAX_TREE_DEPTH,MAX_LEAF_NODES,TREE_NODE_ELS}); 
+
+    BinaryTree<float> decision_tree_w(decision_tree, TREE_NODE_ELS, MAX_TREE_DEPTH);
 
     // Don't try to evaluate if img in has 0 value!
     const uint16 img_d = img_in.get({img_idx, img_y, img_x});
@@ -133,7 +134,7 @@ extern "C" {__global__
 
     // should be unrolled??
     for (int j = 0; j < MAX_TREE_DEPTH; j++) {
-        float* d_ptr = decision_tree_w.get_ptr({j, g, 0});
+        float* d_ptr = decision_tree_w.get_ptr(j, g);
         const float2 u = {d_ptr[0], d_ptr[1]};
         const float2 v = {d_ptr[2], d_ptr[3]};
         const float thresh = d_ptr[4];
@@ -228,13 +229,12 @@ void pick_best_features(
     if (i >= NUM_ACTIVE_NODES) return;
 
     const int TREE_NODE_ELS = 7 + (NUM_CLASSES * 2);
-    const int MAX_NODES = 1 << MAX_TREE_DEPTH; // 2^MAX_TREE_DEPTH
-    Array2d<uint64> parent_node_counts(_parent_node_counts, {MAX_NODES, NUM_CLASSES});
-    Array3d<uint64> child_node_counts_by_feature(_child_node_counts_by_feature, {NUM_RANDOM_FEATURES, MAX_NODES, NUM_CLASSES});
+    const int MAX_LEAF_NODES = 1 << (MAX_TREE_DEPTH);
+    Array2d<uint64> parent_node_counts(_parent_node_counts, {MAX_LEAF_NODES, NUM_CLASSES});
+    Array3d<uint64> child_node_counts_by_feature(_child_node_counts_by_feature, {NUM_RANDOM_FEATURES, MAX_LEAF_NODES, NUM_CLASSES});
     Array2d<float> random_features(_random_features, {NUM_RANDOM_FEATURES, 5}); // (ux,uy,vx,vy,thresh)
-    Array3d<float> tree_out(_tree_out, {MAX_TREE_DEPTH, MAX_NODES, TREE_NODE_ELS});
-
-    Array2d<uint64> child_node_counts(_child_node_counts, {MAX_NODES, NUM_CLASSES});
+    BinaryTree<float> tree_out(_tree_out, TREE_NODE_ELS, MAX_TREE_DEPTH);
+    Array2d<uint64> child_node_counts(_child_node_counts, {MAX_LEAF_NODES, NUM_CLASSES});
 
     const int parent_node = active_nodes[i];
 
@@ -279,7 +279,7 @@ void pick_best_features(
     assert(best_left_counts_sum + best_right_counts_sum == parent_nodes_sum);
 
     // copy selected proposal!
-    float* tree_out_ptr = tree_out.get_ptr({CURRENT_TREE_LEVEL, parent_node, 0});
+    float* tree_out_ptr = tree_out.get_ptr(CURRENT_TREE_LEVEL, parent_node);
     float* proposal_ptr = random_features.get_ptr({best_g_feature_id, 0});
     memcpy(tree_out_ptr, proposal_ptr, sizeof(float) * 5);
 
@@ -365,12 +365,11 @@ void copy_pixel_groups(
 
     Array3d<uint16> img_depth(_img_depth, {NUM_IMAGES, IMG_DIM_Y, IMG_DIM_X});
 
+    // each tree node consists of this many elements..
     const int TREE_NODE_ELS = 7 + (NUM_CLASSES * 2);
-    const int MAX_LEAF_NODES = 1 << MAX_TREE_DEPTH;
-    Array3d<float> tree_so_far(_tree_so_far, {MAX_TREE_DEPTH, MAX_LEAF_NODES, TREE_NODE_ELS });
-
+    BinaryTree<float> tree_so_far(_tree_so_far, TREE_NODE_ELS, MAX_TREE_DEPTH);
     // if still active, evaluate at tree!
-    float* tree_node_ptr = tree_so_far.get_ptr({CURRENT_TREE_LEVEL, i_parent_node, 0});
+    float* tree_node_ptr = tree_so_far.get_ptr(CURRENT_TREE_LEVEL, i_parent_node);
 
     const float2 u{tree_node_ptr[0], tree_node_ptr[1]};
     const float2 v{tree_node_ptr[2], tree_node_ptr[3]};

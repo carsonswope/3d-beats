@@ -103,7 +103,7 @@ def compute_feature(i, x, u, v):
 # feature is simply a set of xy offsets
 def make_random_offset():
     f_theta = np.random.uniform(0, np.pi*2)
-    magnitude = np.random.uniform(0, 100000)
+    magnitude = np.random.uniform(0, 350000)
     return np.array([np.cos(f_theta), np.sin(f_theta)]) * magnitude
 
 def make_random_feature():
@@ -111,7 +111,7 @@ def make_random_feature():
 
 # how about this threshold?
 def make_random_threshold():
-    return np.random.uniform(-500., 500.)
+    return np.random.uniform(-750., 750.)
 
 # pixel idx = single number for image_num, x, y
 def get_pixel_info(pixel_id):
@@ -151,17 +151,26 @@ train_labels_cu = cu_array.to_gpu(train_labels)
 
 num_pixels = NUM_TRAIN * IMG_DIMS[1] * IMG_DIMS[0]
 
-MAX_TREE_DEPTH = 10
-max_nodes = 2**MAX_TREE_DEPTH # decision tree could have this many leaf nodes!
+NUM_RANDOM_FEATURES = 64
 
-NUM_RANDOM_FEATURES = 32
+MAX_TREE_DEPTH = 18
+# number of nodes required to specify entire tree
+TOTAL_TREE_NODES = (2**MAX_TREE_DEPTH) - 1
+# number of nodes required to specify tree at the deepest level + 1 (because at the deepest level, nodes still need to be split into L and R children)
+MAX_LEAF_NODES = 2**(MAX_TREE_DEPTH)
+# number of (floats) for each node
+TREE_NODE_ELS = 7 + (NUM_CLASSES * 2)
 
-node_counts = np.zeros((max_nodes, NUM_CLASSES), dtype=np.uint64)
+# tightly packed binary tree..
+tree_out_cu = cu_array.GPUArray((TOTAL_TREE_NODES, TREE_NODE_ELS), dtype=np.float32)
+tree_out_cu.fill(np.float32(0.))
+
+node_counts = np.zeros((MAX_LEAF_NODES, NUM_CLASSES), dtype=np.uint64)
 node_counts[0,1:] = np.unique(train_labels, return_counts=True)[1][1:]
 
 node_counts_cu = cu_array.to_gpu(node_counts)
 next_node_counts_cu = cu_array.to_gpu(node_counts)
-next_node_counts_by_feature = np.zeros((NUM_RANDOM_FEATURES, max_nodes, NUM_CLASSES), dtype=np.uint64)
+next_node_counts_by_feature = np.zeros((NUM_RANDOM_FEATURES, MAX_LEAF_NODES, NUM_CLASSES), dtype=np.uint64)
 next_node_counts_by_feature_cu = cu_array.to_gpu(next_node_counts_by_feature)
 
 # start each pixel part of group -1
@@ -171,26 +180,22 @@ nodes_by_pixel[np.where(train_labels > 0)] = 0
 nodes_by_pixel_cu = cu_array.to_gpu(nodes_by_pixel)
 next_nodes_by_pixel_cu = cu_array.to_gpu(nodes_by_pixel)
 
-active_nodes_cu = cu_array.GPUArray((max_nodes), dtype=np.int32)
-next_active_nodes_cu = cu_array.GPUArray((max_nodes), dtype=np.int32)
+active_nodes_cu = cu_array.GPUArray((MAX_LEAF_NODES), dtype=np.int32)
+next_active_nodes_cu = cu_array.GPUArray((MAX_LEAF_NODES), dtype=np.int32)
 
 next_num_active_nodes_cu = cu_array.GPUArray((1), dtype=np.int32)
 next_num_active_nodes_cu.fill(np.int32(1))
 def get_next_num_active_nodes():
     return next_num_active_nodes_cu.get()[0]
 
-
-TREE_NODE_ELS = 7 + (NUM_CLASSES * 2)
-tree_out = np.zeros((MAX_TREE_DEPTH, max_nodes, TREE_NODE_ELS), dtype=np.float32) # ux,uy,vx,vy,thresh,l_flag(0 or -1),r_flag(0 or -1),l_pdf(used if l_flag == 0),r_pdf(used if r_flag == 0)
-
-tree_out_copy = np.zeros((MAX_TREE_DEPTH, max_nodes, TREE_NODE_ELS), dtype=np.float32)
-tree_out_cu = cu_array.to_gpu(tree_out_copy)
-
-# empty proposals buffer
-proposal_features_flat = np.zeros((NUM_RANDOM_FEATURES, 5), dtype=np.float32)
-proposal_features_cu = cu_array.to_gpu(proposal_features_flat)
+# random proposal features
+proposal_features_cu = cu_array.GPUArray((NUM_RANDOM_FEATURES, 5), dtype=np.float32)
 
 for current_level in range(MAX_TREE_DEPTH):
+
+    num_active_nodes = get_next_num_active_nodes()
+    if num_active_nodes == 0:
+        break
 
     print('training level', current_level)
 
@@ -202,8 +207,10 @@ for current_level in range(MAX_TREE_DEPTH):
     # reset next per-feature node counts
     next_node_counts_by_feature_cu.fill(np.uint64(0))
 
-    grid_dim = (int(num_pixels / 32) + 1, 1, 1)
-    block_dim = (32, NUM_RANDOM_FEATURES, 1)
+    MAX_THREADS_PER_BLOCK = 1024
+    BLOCK_DIM_X = int(MAX_THREADS_PER_BLOCK // NUM_RANDOM_FEATURES)
+    grid_dim = (int(num_pixels // BLOCK_DIM_X) + 1, 1, 1)
+    block_dim = (BLOCK_DIM_X, int(NUM_RANDOM_FEATURES), 1)
 
     cu_eval_random_features(
         np.int32(NUM_TRAIN),
@@ -221,10 +228,8 @@ for current_level in range(MAX_TREE_DEPTH):
 
     node_counts_cu.set(next_node_counts_cu)
 
-    num_active_nodes = get_next_num_active_nodes()
-
-    pick_best_grid_dim = (int(num_active_nodes / 256) + 1, 1, 1)
-    pick_best_block_dim = (256, 1, 1)
+    pick_best_grid_dim = (int(num_active_nodes // MAX_THREADS_PER_BLOCK) + 1, 1, 1)
+    pick_best_block_dim = (MAX_THREADS_PER_BLOCK, 1, 1)
 
     next_node_counts_cu.fill(np.uint64(0))
     next_active_nodes_cu.fill(np.int32(0))
@@ -245,11 +250,14 @@ for current_level in range(MAX_TREE_DEPTH):
         next_active_nodes_cu,
         next_num_active_nodes_cu,
         grid=pick_best_grid_dim, block=pick_best_block_dim)
-    
+
+    if current_level == MAX_TREE_DEPTH - 1:
+        break
+
     next_nodes_by_pixel_cu.fill(np.int32(-1))
 
-    copy_grid_dim = (int(num_pixels / 256) + 1, 1, 1)
-    copy_block_dim = (256, 1, 1)
+    copy_grid_dim = (int(num_pixels // MAX_THREADS_PER_BLOCK) + 1, 1, 1)
+    copy_block_dim = (MAX_THREADS_PER_BLOCK, 1, 1)
 
     cu_copy_pixel_groups(
         np.int32(NUM_TRAIN),

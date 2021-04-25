@@ -1,6 +1,29 @@
 #ifndef __CU_UTILS
 #define __CU_UTILS
 
+template<typename T>
+class BinaryTree {
+private:
+    const int els_per_node;
+    T* data;
+    const int num_levels;
+public:
+
+    explicit __device__ BinaryTree(T* _data, int _els_per_node, int _num_levels):
+        data(_data),
+        els_per_node(_els_per_node),
+        num_levels(_num_levels) {}
+
+    __device__ T* get_ptr(int level, int node) {
+        assert(level < num_levels);
+        const int MAX_NODES_FOR_LEVEL = 1 << level;
+        assert(node < MAX_NODES_FOR_LEVEL);
+
+        const int idx_offset = (1 << level) - 1;
+        return data + ((idx_offset + node) * els_per_node);
+    }
+};
+
 // Wrapper for a 3d array, like the one in numpy!
 template <typename T>
 class Array3d {
