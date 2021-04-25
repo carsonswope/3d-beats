@@ -151,7 +151,7 @@ train_labels_cu = cu_array.to_gpu(train_labels)
 
 num_pixels = NUM_TRAIN * IMG_DIMS[1] * IMG_DIMS[0]
 
-MAX_TREE_DEPTH = 20
+MAX_TREE_DEPTH = 10
 max_nodes = 2**MAX_TREE_DEPTH # decision tree could have this many leaf nodes!
 
 NUM_RANDOM_FEATURES = 32
@@ -170,21 +170,15 @@ nodes_by_pixel = np.ones((NUM_TRAIN, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.int32) 
 nodes_by_pixel[np.where(train_labels > 0)] = 0
 nodes_by_pixel_cu = cu_array.to_gpu(nodes_by_pixel)
 next_nodes_by_pixel_cu = cu_array.to_gpu(nodes_by_pixel)
-next_nodes_by_pixel_by_feature = np.ones((NUM_RANDOM_FEATURES, NUM_TRAIN, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.int32) * -1
-next_nodes_by_pixel_by_feature_cu = cu_array.to_gpu(next_nodes_by_pixel_by_feature)
 
-active_nodes_cu = cu_array.GPUArray((max_nodes), np.int32)
+active_nodes_cu = cu_array.GPUArray((max_nodes), dtype=np.int32)
+next_active_nodes_cu = cu_array.GPUArray((max_nodes), dtype=np.int32)
 
 next_num_active_nodes_cu = cu_array.GPUArray((1), dtype=np.int32)
 next_num_active_nodes_cu.fill(np.int32(1))
 def get_next_num_active_nodes():
     return next_num_active_nodes_cu.get()[0]
 
-next_active_nodes = np.zeros((max_nodes), dtype=np.int32)
-next_active_nodes_cu = cu_array.to_gpu(next_active_nodes)
-
-selected_features_map = np.zeros((max_nodes), dtype=np.int32) # -1: not active. 0 or greater: feature selected for that node
-selected_features_map_cu = cu_array.to_gpu(selected_features_map)
 
 TREE_NODE_ELS = 7 + (NUM_CLASSES * 2)
 tree_out = np.zeros((MAX_TREE_DEPTH, max_nodes, TREE_NODE_ELS), dtype=np.float32) # ux,uy,vx,vy,thresh,l_flag(0 or -1),r_flag(0 or -1),l_pdf(used if l_flag == 0),r_pdf(used if r_flag == 0)
@@ -208,9 +202,6 @@ for current_level in range(MAX_TREE_DEPTH):
     # reset next per-feature node counts
     next_node_counts_by_feature_cu.fill(np.uint64(0))
 
-    # reset next per-feature groups
-    next_nodes_by_pixel_by_feature_cu.fill(np.int32(-1))
-
     grid_dim = (int(num_pixels / 32) + 1, 1, 1)
     block_dim = (32, NUM_RANDOM_FEATURES, 1)
 
@@ -225,13 +216,10 @@ for current_level in range(MAX_TREE_DEPTH):
         train_depth_cu,
         proposal_features_cu,
         nodes_by_pixel_cu,
-        next_nodes_by_pixel_by_feature_cu,
         next_node_counts_by_feature_cu,
         grid=grid_dim, block=block_dim)
 
     node_counts_cu.set(next_node_counts_cu)
-
-    # node_counts_cu.set(node_counts)
 
     num_active_nodes = get_next_num_active_nodes()
 
@@ -241,8 +229,6 @@ for current_level in range(MAX_TREE_DEPTH):
     next_node_counts_cu.fill(np.uint64(0))
     next_active_nodes_cu.fill(np.int32(0))
     next_num_active_nodes_cu.fill(np.int32(0))
-
-    selected_features_map_cu.fill(np.uint16(0))
 
     cu_pick_best_features(
         np.int32(num_active_nodes),
@@ -258,7 +244,6 @@ for current_level in range(MAX_TREE_DEPTH):
         next_node_counts_cu,
         next_active_nodes_cu,
         next_num_active_nodes_cu,
-        selected_features_map_cu,
         grid=pick_best_grid_dim, block=pick_best_block_dim)
     
     next_nodes_by_pixel_cu.fill(np.int32(-1))
@@ -267,23 +252,20 @@ for current_level in range(MAX_TREE_DEPTH):
     copy_block_dim = (256, 1, 1)
 
     cu_copy_pixel_groups(
-        np.int32(num_pixels),
-        np.int32(NUM_RANDOM_FEATURES),
+        np.int32(NUM_TRAIN),
+        np.int32(IMG_DIMS[0]),
+        np.int32(IMG_DIMS[1]),
         np.int32(current_level),
         np.int32(MAX_TREE_DEPTH),
-        np.int32(max_nodes),
         np.int32(NUM_CLASSES),
+        train_depth_cu,
         nodes_by_pixel_cu,
-        next_nodes_by_pixel_by_feature_cu,
-        selected_features_map_cu,
         next_nodes_by_pixel_cu,
         tree_out_cu,
-        grid = copy_grid_dim, block=copy_block_dim
-    )
+        grid = copy_grid_dim, block=copy_block_dim)
 
     nodes_by_pixel_cu.set(next_nodes_by_pixel_cu)
     active_nodes_cu.set(next_active_nodes_cu)
-
 
 
 print('tree training done..')

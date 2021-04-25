@@ -36,8 +36,7 @@ void evaluate_random_features(
         uint16* _img_labels,
         uint16* _img_depth,
         float* _random_features,
-        int* nodes_by_pixel, // int32?? -1 means not active, 
-        int* _next_nodes,
+        int* nodes_by_pixel, // int32?? -1 means not active,
         uint64* _next_nodes_counts) {
 
     const int2 IMG_DIM{IMG_DIM_X, IMG_DIM_Y};
@@ -61,7 +60,6 @@ void evaluate_random_features(
     Array3d<uint16> img_labels(_img_labels, {NUM_IMAGES,IMG_DIM_Y,IMG_DIM_X});
     Array3d<uint16> img_depth(_img_depth, {NUM_IMAGES,IMG_DIM_Y,IMG_DIM_X});
     Array2d<float> random_features(_random_features, {NUM_RANDOM_FEATURES, 5}); // (ux,uy,vx,vy,thresh)
-    Array2d<int> next_nodes(_next_nodes, {NUM_RANDOM_FEATURES, TOTAL_NUM_PIXELS});
     Array3d<uint64> next_nodes_counts(_next_nodes_counts, {NUM_RANDOM_FEATURES, MAX_LEAF_NODES, NUM_CLASSES});
 
     const uint16 label = img_labels.get({img_idx, img_y, img_x});
@@ -74,7 +72,6 @@ void evaluate_random_features(
     // eval feature, split pixel into L or R node of next level
     const float f_val = compute_feature(img_depth, img_idx, {img_x, img_y}, u, v);
     const int next_node = (node * 2) + (f_val < f_thresh ? 0 : 1);
-    next_nodes.set({j, i}, next_node);
 
     uint64* next_nodes_counts_ptr = next_nodes_counts.get_ptr({j, next_node, label});
     atomicAdd(next_nodes_counts_ptr, (uint64)1);
@@ -134,7 +131,6 @@ extern "C" {__global__
     // current node ID
     int g = 0;
 
-
     // should be unrolled??
     for (int j = 0; j < MAX_TREE_DEPTH; j++) {
         float* d_ptr = decision_tree_w.get_ptr({j, g, 0});
@@ -180,7 +176,7 @@ __device__ uint64 node_counts_sum(uint64* p, const int num_classes) {
 }
 
 __device__ float gini_impurity(uint64* c, const int num_classes) {
-    // Assumptions for 3-class case where 0 alwasy has 0 count
+    // Assumptions for 3-class case where 0 always has 0 count
     assert(num_classes == 3);
     assert(c[0] == 0.f);
     assert(c[1] + c[2] > 0.);
@@ -190,6 +186,7 @@ __device__ float gini_impurity(uint64* c, const int num_classes) {
 }
 
 __device__ float gini_gain(uint64* p_counts, uint64* l_counts, uint64* r_counts, const int num_classes) {
+    // Need to be able to relax these assumptions!
     assert(num_classes == 3);
     assert(p_counts[0] == 0.f);
     float p_sum = p_counts[1] + p_counts[2];
@@ -208,8 +205,6 @@ __device__ int count_above_cutoff(uint64* counts, const int num_classes, const u
     return -1;
 }
 
-extern __shared__ float best_g[];
-
 extern "C" {__global__
 void pick_best_features(
         int NUM_ACTIVE_NODES,
@@ -224,8 +219,7 @@ void pick_best_features(
         float* _tree_out,
         uint64* _child_node_counts, // not by feature! - after we picked the best feature!
         int* next_active_nodes,
-        int* num_next_active_nodes,
-        int* selected_features_map // per parent node: record which feature idx was selected
+        int* num_next_active_nodes
     ) {
 
     // i: active node idx
@@ -277,8 +271,6 @@ void pick_best_features(
             best_right_counts_ptr = right_child_counts_ptr;
         }
     }
-
-    selected_features_map[parent_node] = best_g_feature_id;
 
     const uint64 best_left_counts_sum = node_counts_sum(best_left_counts_ptr, NUM_CLASSES);
     const uint64 best_right_counts_sum  = node_counts_sum(best_right_counts_ptr, NUM_CLASSES);
@@ -346,41 +338,52 @@ void pick_best_features(
 
 extern "C" {__global__
 void copy_pixel_groups(
-        int NUM_PIXELS,
-        int NUM_RANDOM_FEATURES,
+        int NUM_IMAGES,
+        int IMG_DIM_X,
+        int IMG_DIM_Y,
         int CURRENT_TREE_LEVEL,
         int MAX_TREE_DEPTH,
-        int MAX_TREE_NODES,
         int NUM_CLASSES,
-        int* nodes_by_pixel, // int32?? -1 means not active,
-        int* _next_nodes_by_pixel_by_random_feature,
-        int* random_feature_by_node_map,
+        uint16* _img_depth,
+        int* nodes_by_pixel, // -1 means not active
         int* next_nodes_by_pixel,
         float* _tree_so_far) {
 
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= NUM_PIXELS) return;
+    const int2 IMG_DIM{IMG_DIM_X, IMG_DIM_Y};
+    const int TOTAL_NUM_PIXELS = NUM_IMAGES * IMG_DIM.x * IMG_DIM.y;
+    if (i >= TOTAL_NUM_PIXELS) return;
 
     const int i_parent_node = nodes_by_pixel[i];
     // pixel inactive: no need to copy anything
     if (i_parent_node == -1) return;
 
-    // pixel active.. which feature was chosen for the node it was part of?
-    const int feature_idx = random_feature_by_node_map[i_parent_node];
-    assert(feature_idx > -1);
+    const int img_idx = i / (IMG_DIM.x * IMG_DIM.y);
+    const int i_rem = i % (IMG_DIM.x * IMG_DIM.y);
+    const int img_y = i_rem / IMG_DIM.x;
+    const int img_x = i_rem % IMG_DIM.x;
 
-    Array2d<int> next_nodes_by_pixel_by_random_feature(_next_nodes_by_pixel_by_random_feature, {NUM_RANDOM_FEATURES, NUM_PIXELS});
-    const int i_child_node = next_nodes_by_pixel_by_random_feature.get({feature_idx, i});
-
-    const int is_left_node = i_child_node == i_parent_node * 2;
-    if (!is_left_node) { assert(i_child_node == i_parent_node * 2 + 1); }
+    Array3d<uint16> img_depth(_img_depth, {NUM_IMAGES, IMG_DIM_Y, IMG_DIM_X});
 
     const int TREE_NODE_ELS = 7 + (NUM_CLASSES * 2);
-    Array3d<float> tree_so_far(_tree_so_far, {MAX_TREE_DEPTH, MAX_TREE_NODES, TREE_NODE_ELS });
+    const int MAX_LEAF_NODES = 1 << MAX_TREE_DEPTH;
+    Array3d<float> tree_so_far(_tree_so_far, {MAX_TREE_DEPTH, MAX_LEAF_NODES, TREE_NODE_ELS });
 
-    const int branch_status = __float2int_rd(tree_so_far.get({CURRENT_TREE_LEVEL, i_parent_node, is_left_node ? 5 : 6}));
-    if (branch_status != -1) return;
+    // if still active, evaluate at tree!
+    float* tree_node_ptr = tree_so_far.get_ptr({CURRENT_TREE_LEVEL, i_parent_node, 0});
 
-    // This means the branch is still going!
-    next_nodes_by_pixel[i] = i_child_node;
+    const float2 u{tree_node_ptr[0], tree_node_ptr[1]};
+    const float2 v{tree_node_ptr[2], tree_node_ptr[3]};
+    const float f_thresh = tree_node_ptr[4];
+
+    const float f_val = compute_feature(img_depth, img_idx, {img_x, img_y}, u, v);
+
+    const bool is_left_node = f_val < f_thresh;
+    const int node_status = __float2int_rd(tree_node_ptr[is_left_node ? 5 : 6]);
+    // If child node is labeled -1, that means the child node is active!
+    if (node_status != -1) return;
+
+    const int next_node = (i_parent_node * 2) + (is_left_node ? 0 : 1);
+    next_nodes_by_pixel[i] = next_node;
+
 }}
