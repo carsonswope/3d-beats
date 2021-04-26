@@ -5,3 +5,4 @@ datagen/generated2_test
 *.blend1
 .vscode
 evals
+__pycache__

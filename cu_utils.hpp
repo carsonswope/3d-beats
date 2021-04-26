@@ -1,6 +1,10 @@
 #ifndef __CU_UTILS
 #define __CU_UTILS
 
+typedef unsigned short uint16;
+typedef unsigned int uint32;
+typedef unsigned long long uint64;
+
 template<typename T>
 class BinaryTree {
 private:
