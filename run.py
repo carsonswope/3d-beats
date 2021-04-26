@@ -28,19 +28,21 @@ except Exception as e:
 
 DEPTH = 'depth'
 LABELS = 'labels'
-TEST = 'datagen/generated/test_no_table'
-TRAIN = 'datagen/generated/test_no_table'
+TEST = 'datagen/generated/train_3class'
+TRAIN = 'datagen/generated/train_3class'
 
 IMG_DIMS = np.array([424, 240], dtype=np.int)
 
 COLOR_NONE = np.array([0, 0, 0, 0], dtype='uint16')
 COLOR_TABLE = np.array([255, 0, 0, 255], dtype='uint16')
 COLOR_HAND = np.array([0, 0, 255, 255], dtype='uint16')
+COLOR_FINGER = np.array([0, 255, 0, 255], dtype='uint16')
 
 ID_NONE = 0
 ID_TABLE = 1
 ID_HAND = 2
-NUM_CLASSES = 3
+ID_FINGER = 3
+NUM_CLASSES = 4
 
 # DATA_ROOT = 'datagen/generated2'
 # s: TEST or TRAIN (set)
@@ -67,11 +69,12 @@ def load_data(s, num):
         l_2[np.all(l_1 == COLOR_NONE, axis=2)] = ID_NONE
         l_2[np.all(l_1 == COLOR_TABLE, axis=2)] = ID_TABLE
         l_2[np.all(l_1 == COLOR_HAND, axis=2)] = ID_HAND
+        l_2[np.all(l_1 == COLOR_FINGER, axis=2)] = ID_FINGER
 
         # all -1s have been replaced
         assert np.min(l_2) >= 0
         # all 100s have been replaced
-        assert np.max(l_2) == 2
+        assert np.max(l_2) == 3
 
         all_labels[i,:,:] = l_2
 
@@ -79,8 +82,8 @@ def load_data(s, num):
     
     return all_depth, all_labels
 
-FEATURE_MAGNITUDE_MAX = 800000.
-FEATURE_THRESHOLD_MAX = 7500. # _MIN = -_MAX
+FEATURE_MAGNITUDE_MAX = 500000.
+FEATURE_THRESHOLD_MAX = 1000. # _MIN = -_MAX
 
 # feature is simply a set of xy offsets
 def make_random_offset():
@@ -102,9 +105,9 @@ def make_random_features(n):
 print('loading training data')
 
 NUM_TRAIN = 128
-NUM_RANDOM_FEATURES = 64
+NUM_RANDOM_FEATURES = 256
 
-MAX_TREE_DEPTH = 22
+MAX_TREE_DEPTH = 19
 MAX_THREADS_PER_BLOCK = 1024 # cuda constant..
 
 # 2 NP arrays of shape (n, y, x), dtype uint16
@@ -235,11 +238,8 @@ for current_level in range(MAX_TREE_DEPTH):
     nodes_by_pixel_cu.set(next_nodes_by_pixel_cu)
     active_nodes_cu.set(next_active_nodes_cu)
 
-
 print('tree training done..')
-
 print('beginnign evaluation..')
-
 NUM_TEST = 16
 
 # 2 NP arrays of shape (n, y, x), dtype uint16
@@ -269,16 +269,10 @@ test_output_labels = test_output_labels_cu.get()
 test_output_labels_render = np.zeros((NUM_TEST, IMG_DIMS[1], IMG_DIMS[0], 4), dtype='uint8')
 test_output_labels_render[np.where(test_output_labels == ID_TABLE)] = COLOR_TABLE
 test_output_labels_render[np.where(test_output_labels == ID_HAND)] = COLOR_HAND
-
-num_pixels_to_match = np.sum(test_labels > 0)
-
-# todo: filter out non-pixels!
+test_output_labels_render[np.where(test_output_labels == ID_FINGER)] = COLOR_FINGER
 
 test_output_labels[np.where(test_output_labels == 0)] = 65535 # make sure 0s dont match
-matching_pixels = np.sum(test_output_labels == test_labels)
-# sh = test_output_labels.shape
-# total_test_pixels = sh[0] * sh[1] * sh[2]
-pct_match = matching_pixels / num_pixels_to_match
+pct_match =  np.sum(test_output_labels == test_labels) / np.sum(test_labels > 0)
 
 print('pct. matching pixels: ', pct_match)
 print('saving renders..')
