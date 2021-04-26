@@ -28,8 +28,8 @@ except Exception as e:
 
 DEPTH = 'depth'
 LABELS = 'labels'
-TEST = 'datagen/generated2_test/test'
-TRAIN = 'datagen/generated2/train'
+TEST = 'datagen/generated/test_no_table'
+TRAIN = 'datagen/generated/test_no_table'
 
 IMG_DIMS = np.array([424, 240], dtype=np.int)
 
@@ -74,11 +74,13 @@ def load_data(s, num):
         assert np.max(l_2) == 2
 
         all_labels[i,:,:] = l_2
+
+    all_depth[np.where(all_depth == 0)] = np.uint16(65535) # max for 16 bit unsigned
     
     return all_depth, all_labels
 
-FEATURE_MAGNITUDE_MAX = 1000000.
-FEATURE_THRESHOLD_MAX = 2500. # _MIN = -_MAX
+FEATURE_MAGNITUDE_MAX = 800000.
+FEATURE_THRESHOLD_MAX = 7500. # _MIN = -_MAX
 
 # feature is simply a set of xy offsets
 def make_random_offset():
@@ -100,9 +102,9 @@ def make_random_features(n):
 print('loading training data')
 
 NUM_TRAIN = 128
-NUM_RANDOM_FEATURES = 32
+NUM_RANDOM_FEATURES = 64
 
-MAX_TREE_DEPTH = 10
+MAX_TREE_DEPTH = 22
 MAX_THREADS_PER_BLOCK = 1024 # cuda constant..
 
 # 2 NP arrays of shape (n, y, x), dtype uint16
@@ -268,10 +270,15 @@ test_output_labels_render = np.zeros((NUM_TEST, IMG_DIMS[1], IMG_DIMS[0], 4), dt
 test_output_labels_render[np.where(test_output_labels == ID_TABLE)] = COLOR_TABLE
 test_output_labels_render[np.where(test_output_labels == ID_HAND)] = COLOR_HAND
 
+num_pixels_to_match = np.sum(test_labels > 0)
+
+# todo: filter out non-pixels!
+
+test_output_labels[np.where(test_output_labels == 0)] = 65535 # make sure 0s dont match
 matching_pixels = np.sum(test_output_labels == test_labels)
-sh = test_output_labels.shape
-total_test_pixels = sh[0] * sh[1] * sh[2]
-pct_match = matching_pixels / total_test_pixels
+# sh = test_output_labels.shape
+# total_test_pixels = sh[0] * sh[1] * sh[2]
+pct_match = matching_pixels / num_pixels_to_match
 
 print('pct. matching pixels: ', pct_match)
 print('saving renders..')

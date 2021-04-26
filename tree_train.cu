@@ -127,7 +127,7 @@ extern "C" {__global__
 
     // Don't try to evaluate if img in has 0 value!
     const uint16 img_d = img_in.get({img_idx, img_y, img_x});
-    if (img_d == 0) { return; }
+    if (img_d == 0 || img_d == 65535) { return; } // max uint16 is also considered 'not present'
 
     // current node ID
     int g = 0;
