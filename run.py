@@ -27,14 +27,15 @@ decision_tree_dataset_config = DecisionTreeDatasetConfig(
     # ID to COLOR mapping
     { 1: (255, 0, 0, 255),
     2: (0, 0, 255, 255),
-    3: (0, 255, 0, 255) })
+    3: (0, 255, 0, 255),
+    4: (124, 30, 255, 255) })
 
-TRAIN = 'datagen/generated/train_3class'
-NUM_TRAIN = 128
+TRAIN = 'datagen/gen_4class/train'
+NUM_TRAIN = 4096
 train_data = DecisionTreeDataset(TRAIN, NUM_TRAIN, decision_tree_dataset_config)
 
-TEST = 'datagen/generated/train_3class'
-NUM_TEST = 16
+TEST = 'datagen/gen_4class/test'
+NUM_TEST = 128
 test_data = DecisionTreeDataset(TEST, NUM_TEST, decision_tree_dataset_config)
 
 print('allocating GPU memory')
