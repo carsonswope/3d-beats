@@ -28,8 +28,8 @@ except Exception as e:
 
 DEPTH = 'depth'
 LABELS = 'labels'
-TEST = 'test'
-TRAIN = 'train'
+TEST = 'datagen/generated2_test/test'
+TRAIN = 'datagen/generated2/train'
 
 IMG_DIMS = np.array([424, 240], dtype=np.int)
 
@@ -42,11 +42,11 @@ ID_TABLE = 1
 ID_HAND = 2
 NUM_CLASSES = 3
 
-DATA_ROOT = 'datagen/generated'
+# DATA_ROOT = 'datagen/generated2'
 # s: TEST or TRAIN (set)
 # t: DEPTH or LABELS (type)
 def data_path(s, t, i):
-    return DATA_ROOT + '/' + s + '_' + str(i).zfill(8) + '_' + t + '.png'
+    return s + '_' + str(i).zfill(8) + '_' + t + '.png'
 
 def load_data(s, num):
     all_depth = np.zeros((num, IMG_DIMS[1], IMG_DIMS[0]), dtype='uint16')
@@ -69,41 +69,21 @@ def load_data(s, num):
         l_2[np.all(l_1 == COLOR_HAND, axis=2)] = ID_HAND
 
         # all -1s have been replaced
-        assert np.min(l_2) > -1
+        assert np.min(l_2) >= 0
+        # all 100s have been replaced
         assert np.max(l_2) == 2
 
         all_labels[i,:,:] = l_2
     
     return all_depth, all_labels
 
-
-# i: np image[row][col]
-# x: coords in x,y ?
-def read_pixel(i, x):
-    x = np.round(x).astype('int')
-    if (x[0] < 0 or x[1] < 0):
-        return 0
-    if (x[0] >= IMG_DIMS[0] or x[1] >= IMG_DIMS[1]):
-        return 0
-    return i[x[1]][x[0]]
-
-# i: image
-# x: pixel coord
-# u: offset 1. 
-# v: offset 2
-def compute_feature(i, x, u, v):
-    d_x = read_pixel(i, x)
-    u_coord = x + (u / d_x)
-    v_coord = x + (v / d_x)
-    # convert to floats..
-    d_u = read_pixel(i, u_coord) * 1.
-    d_v = read_pixel(i, v_coord) * 1.
-    return d_u - d_v
+FEATURE_MAGNITUDE_MAX = 1000000.
+FEATURE_THRESHOLD_MAX = 2500. # _MIN = -_MAX
 
 # feature is simply a set of xy offsets
 def make_random_offset():
     f_theta = np.random.uniform(0, np.pi*2)
-    magnitude = np.random.uniform(0, 350000)
+    magnitude = np.random.uniform(0, FEATURE_MAGNITUDE_MAX)
     return np.array([np.cos(f_theta), np.sin(f_theta)]) * magnitude
 
 def make_random_feature():
@@ -111,49 +91,30 @@ def make_random_feature():
 
 # how about this threshold?
 def make_random_threshold():
-    return np.random.uniform(-750., 750.)
+    return np.random.uniform(-FEATURE_THRESHOLD_MAX, FEATURE_THRESHOLD_MAX)
 
-# pixel idx = single number for image_num, x, y
-def get_pixel_info(pixel_id):
-    i = pixel_id // (IMG_DIMS[1] * IMG_DIMS[0])
-    # remainder..
-    pixel_id = pixel_id % (IMG_DIMS[1] * IMG_DIMS[0])
-    y = pixel_id // IMG_DIMS[0]
-    x = pixel_id % IMG_DIMS[0]
-    return i, x, y
+def make_random_features(n):
+    proposal_features = [(make_random_feature(), make_random_threshold()) for i in range(n)]
+    return np.array([(p[0][0][0], p[0][0][1], p[0][1][0], p[0][1][1], p[1]) for p in proposal_features ], dtype=np.float32)
 
-# more efficient versions of gini that don't involve linear operation on class list each time
-def gini_impurity2(c):
-    # c = (num0, num1)
-    # counts of class0 and class1 in set
-    assert c[0] + c[1] > 0
-    p = c[0] / (c[0] + c[1])
-    return 2 * p * (1-p)
+print('loading training data')
 
-def gini_gain2(p, cs):
-    # p = (num0, num1)
-    # cs = [(num0, num1), (num0, num1), ...]
-    p_count = p[0] + p[1]
-    previous = gini_impurity2(p)
-    remainder = sum([((c[0] + c[1]) / p_count) * gini_impurity2(c) for c in cs])
-    return previous - remainder
+NUM_TRAIN = 128
+NUM_RANDOM_FEATURES = 32
 
-print('loading training data..')
+MAX_TREE_DEPTH = 10
+MAX_THREADS_PER_BLOCK = 1024 # cuda constant..
 
-NUM_TRAIN = 256
 # 2 NP arrays of shape (n, y, x), dtype uint16
 train_depth, train_labels = load_data(TRAIN, NUM_TRAIN)
 
-print('training tree..')
+print('allocating GPU memory')
 
 train_depth_cu = cu_array.to_gpu(train_depth)
 train_labels_cu = cu_array.to_gpu(train_labels)
 
 num_pixels = NUM_TRAIN * IMG_DIMS[1] * IMG_DIMS[0]
 
-NUM_RANDOM_FEATURES = 64
-
-MAX_TREE_DEPTH = 18
 # number of nodes required to specify entire tree
 TOTAL_TREE_NODES = (2**MAX_TREE_DEPTH) - 1
 # number of nodes required to specify tree at the deepest level + 1 (because at the deepest level, nodes still need to be split into L and R children)
@@ -200,14 +161,11 @@ for current_level in range(MAX_TREE_DEPTH):
     print('training level', current_level)
 
     # make list of random features
-    proposal_features = [(make_random_feature(), make_random_threshold()) for i in range(NUM_RANDOM_FEATURES)]
-    proposal_features_flat = np.array([(p[0][0][0], p[0][0][1], p[0][1][0], p[0][1][1], p[1]) for p in proposal_features ], dtype=np.float32)
-    proposal_features_cu.set(proposal_features_flat)
+    proposal_features_cu.set(make_random_features(NUM_RANDOM_FEATURES))
 
     # reset next per-feature node counts
     next_node_counts_by_feature_cu.fill(np.uint64(0))
 
-    MAX_THREADS_PER_BLOCK = 1024
     BLOCK_DIM_X = int(MAX_THREADS_PER_BLOCK // NUM_RANDOM_FEATURES)
     grid_dim = (int(num_pixels // BLOCK_DIM_X) + 1, 1, 1)
     block_dim = (BLOCK_DIM_X, int(NUM_RANDOM_FEATURES), 1)
@@ -281,18 +239,17 @@ print('tree training done..')
 print('beginnign evaluation..')
 
 NUM_TEST = 16
+
 # 2 NP arrays of shape (n, y, x), dtype uint16
-test_depth, test_labels = load_data(TRAIN, NUM_TEST) # just use training data for now - generate dedicated test data shortly
+test_depth, test_labels = load_data(TEST, NUM_TEST) # just use training data for now - generate dedicated test data shortly
 test_depth_cu = cu_array.to_gpu(test_depth)
 
-test_output_labels = np.zeros((NUM_TEST, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.uint16)
-test_output_labels_cu = cu_array.to_gpu(test_output_labels)
-
+test_output_labels_cu = cu_array.GPUArray((NUM_TEST, IMG_DIMS[1], IMG_DIMS[0]), dtype=np.uint16)
 
 num_test_pixels = NUM_TEST * IMG_DIMS[1] * IMG_DIMS[0]
 
-grid_dim = (int(num_test_pixels / 256) + 1, 1, 1)
-block_dim = (256, 1, 1)
+grid_dim = (int(num_test_pixels // MAX_THREADS_PER_BLOCK) + 1, 1, 1)
+block_dim = (MAX_THREADS_PER_BLOCK, 1, 1)
 
 cu_eval_image(
     np.int32(NUM_TEST),
@@ -305,7 +262,7 @@ cu_eval_image(
     test_output_labels_cu,
     grid=grid_dim, block=block_dim)
 
-test_output_labels_cu.get(test_output_labels)
+test_output_labels = test_output_labels_cu.get()
 
 test_output_labels_render = np.zeros((NUM_TEST, IMG_DIMS[1], IMG_DIMS[0], 4), dtype='uint8')
 test_output_labels_render[np.where(test_output_labels == ID_TABLE)] = COLOR_TABLE

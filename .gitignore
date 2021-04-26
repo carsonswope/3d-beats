@@ -1,5 +1,7 @@
 build
 datagen/generated
+datagen/generated2
+datagen/generated2_test
 *.blend1
 .vscode
 evals

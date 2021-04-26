@@ -177,20 +177,17 @@ __device__ uint64 node_counts_sum(uint64* p, const int num_classes) {
 }
 
 __device__ float gini_impurity(uint64* c, const int num_classes) {
-    // Assumptions for 3-class case where 0 always has 0 count
-    assert(num_classes == 3);
-    assert(c[0] == 0.f);
-    assert(c[1] + c[2] > 0.);
-
-    float p = (c[1] * 1.f) / (c[1] + c[2]);
-    return 2.f * p * (1.f - p);
+    const float s = node_counts_sum(c, num_classes) * 1.f;
+    float p = 0.f;
+    for (int i =0; i < num_classes; i++) {
+        const float p_i = c[i] / s;
+        p += p_i * p_i;
+    }
+    return 1 - p;
 }
 
 __device__ float gini_gain(uint64* p_counts, uint64* l_counts, uint64* r_counts, const int num_classes) {
-    // Need to be able to relax these assumptions!
-    assert(num_classes == 3);
-    assert(p_counts[0] == 0.f);
-    float p_sum = p_counts[1] + p_counts[2];
+    const float p_sum = node_counts_sum(p_counts, num_classes);
     float p_impurity = gini_impurity(p_counts, num_classes);
     float remainder =
         ((node_counts_sum(l_counts, num_classes) / p_sum) * gini_impurity(l_counts, num_classes)) +
@@ -271,6 +268,8 @@ void pick_best_features(
             best_right_counts_ptr = right_child_counts_ptr;
         }
     }
+
+    assert(best_g > -1.f);
 
     const uint64 best_left_counts_sum = node_counts_sum(best_left_counts_ptr, NUM_CLASSES);
     const uint64 best_right_counts_sum  = node_counts_sum(best_right_counts_ptr, NUM_CLASSES);
