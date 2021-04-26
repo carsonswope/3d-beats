@@ -38,15 +38,20 @@ NUM_TEST = 16
 test_data = DecisionTreeDataset(TEST, NUM_TEST, decision_tree_dataset_config)
 
 print('allocating GPU memory')
-NUM_RANDOM_FEATURES = 256
-MAX_TREE_DEPTH = 19
+NUM_RANDOM_FEATURES = 128
+MAX_TREE_DEPTH = 14
 tree1 = DecisionTree(MAX_TREE_DEPTH, decision_tree_dataset_config.num_classes())
 decision_tree_trainer.allocate(train_data, NUM_RANDOM_FEATURES, tree1.max_depth)
 
 # allocate space for evaluated classes on test data
 test_output_labels_cu = cu_array.GPUArray(test_data.images_shape(), dtype=np.uint16)
 
-for i in range(8):
+TREES_IN_FOREST = 4
+best_trees = [None for t in range(TREES_IN_FOREST)]
+tree_cpu = np.zeros((tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
+forest_cpu = np.zeros((TREES_IN_FOREST, tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
+
+for i in range(10):
     print('training tree..')
     decision_tree_trainer.train(train_data, tree1)
 
@@ -58,8 +63,34 @@ for i in range(8):
     pct_match =  np.sum(test_output_labels == test_data.labels) / np.sum(test_data.labels > 0)
     print('pct. matching pixels: ', pct_match)
 
-# the renders for the last piece..
-print('saving renders..')
+    copy_idx = -1
+    if None in best_trees:
+        copy_idx = best_trees.index(None)
+    else:
+        worst_pct_match = min(best_trees)
+        if pct_match > worst_pct_match:
+            copy_idx = best_trees.index(worst_pct_match)
+
+    if copy_idx > -1:
+        print('accepted tree at slot ', copy_idx)
+        best_trees[copy_idx] = pct_match
+        tree1.tree_out_cu.get(tree_cpu)
+        forest_cpu[copy_idx] = np.copy(tree_cpu)
+
+print('completing forest..')
+forest1 = DecisionForest(TREES_IN_FOREST, MAX_TREE_DEPTH, decision_tree_dataset_config.num_classes())
+forest1.forest_cu.set(forest_cpu)
+
+# evaluating forest!
+print('evaluating forest..')
+test_output_labels_cu.fill(np.uint16(MAX_UINT16))
+decision_tree_evaluator.get_labels_forest(forest1, test_data.depth_cu, test_output_labels_cu)
+
+test_output_labels = test_output_labels_cu.get()
+pct_match =  np.sum(test_output_labels == test_data.labels) / np.sum(test_data.labels > 0)
+print('FOREST pct. matching pixels: ', pct_match)
+
+print('saving forest renders..')
 test_output_labels_render = decision_tree_dataset_config.convert_ids_to_colors(test_output_labels)
 for i in range(NUM_TEST):
     out_labels_img = test_output_labels_render[i]

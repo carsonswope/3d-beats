@@ -119,4 +119,3 @@ __device__ __forceinline__ float atomicMaxFloat (float * addr, float value) {
 }
 
 #endif
-

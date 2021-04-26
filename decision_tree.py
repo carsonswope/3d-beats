@@ -111,11 +111,23 @@ class DecisionTree():
 
         return (TOTAL_TREE_NODES, MAX_LEAF_NODES, TREE_NODE_ELS)
 
+class DecisionForest():
+    def __init__(self, num_trees, max_depth, num_classes):
+        self.num_trees = num_trees
+        self.max_depth = max_depth
+        self.num_classes = num_classes
+
+        self.TOTAL_TREE_NODES, self.MAX_LEAF_NODES, self.TREE_NODE_ELS = DecisionTree.get_config(max_depth, num_classes)
+
+        self.forest_cu = cu_array.GPUArray((self.num_trees, self.TOTAL_TREE_NODES, self.TREE_NODE_ELS), dtype=np.float32)
+        self.forest_cu.fill(np.float32(0.))
+
     # def eval()
 class DecisionTreeEvaluator():
     def __init__(self):
         cu_mod = py_nvcc_utils.get_module('tree_eval.cu')
         self.cu_eval_image = cu_mod.get_function('evaluate_image_using_tree')
+        self.cu_eval_image_forest = cu_mod.get_function('evaluate_image_using_forest')
     
     def get_labels(self, tree, depth_images_in, labels_out):
         num_images, dim_y, dim_x = depth_images_in.shape
@@ -135,6 +147,33 @@ class DecisionTreeEvaluator():
             tree.tree_out_cu,
             labels_out,
             grid=grid_dim, block=block_dim)
+
+        
+    def get_labels_forest(self, forest, depth_images_in, labels_out):
+        num_images, dim_y, dim_x = depth_images_in.shape
+
+        num_test_pixels = num_images * dim_y * dim_x
+
+        BLOCK_DIM_X = int(MAX_THREADS_PER_BLOCK // forest.num_trees) 
+        grid_dim = (int(num_test_pixels // BLOCK_DIM_X) + 1, 1, 1)
+        block_dim = (BLOCK_DIM_X, forest.num_trees, 1)
+
+        self.cu_eval_image_forest(
+            np.int32(forest.num_trees),
+            np.int32(num_images),
+            np.int32(dim_x),
+            np.int32(dim_y),
+            np.int32(forest.num_classes),
+            np.int32(forest.max_depth),
+            np.int32(BLOCK_DIM_X),
+            depth_images_in,
+            forest.forest_cu,
+            labels_out,
+            grid=grid_dim, block=block_dim, shared=(BLOCK_DIM_X * forest.num_classes * 4)) # sizeof(float), right?
+
+
+# TODO: modify these thresholds during the training process..
+# but how?
 
 FEATURE_MAGNITUDE_MAX = 500000.
 FEATURE_THRESHOLD_MAX = 1000. # _MIN = -_MAX
@@ -164,8 +203,6 @@ class DecisionTreeTrainer():
         self.cu_copy_pixel_groups = cu_mod.get_function('copy_pixel_groups')
 
     def allocate(self, dataset, NUM_RANDOM_FEATURES, MAX_TREE_DEPTH):
-
-        # self.dataset_config = dataset.con
 
         # then,
         self.NUM_RANDOM_FEATURES = NUM_RANDOM_FEATURES

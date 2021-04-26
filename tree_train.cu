@@ -34,7 +34,7 @@ void evaluate_random_features(
     if (node == -1) { return; }
 
     Array3d<uint16> img_labels(_img_labels, {NUM_IMAGES,IMG_DIM_Y,IMG_DIM_X});
-    Array3d<uint16> img_depth(_img_depth, {NUM_IMAGES,IMG_DIM_Y,IMG_DIM_X});
+    Array3d<uint16> img_depth(_img_depth, {NUM_IMAGES,IMG_DIM_Y,IMG_DIM_X}, MAX_UINT16);
     Array2d<float> random_features(_random_features, {NUM_RANDOM_FEATURES, 5}); // (ux,uy,vx,vy,thresh)
     Array3d<uint64> next_nodes_counts(_next_nodes_counts, {NUM_RANDOM_FEATURES, MAX_LEAF_NODES, NUM_CLASSES});
 
@@ -246,7 +246,7 @@ void copy_pixel_groups(
     const int img_y = i_rem / IMG_DIM.x;
     const int img_x = i_rem % IMG_DIM.x;
 
-    Array3d<uint16> img_depth(_img_depth, {NUM_IMAGES, IMG_DIM_Y, IMG_DIM_X});
+    Array3d<uint16> img_depth(_img_depth, {NUM_IMAGES, IMG_DIM_Y, IMG_DIM_X}, MAX_UINT16);
 
     // each tree node consists of this many elements..
     const int TREE_NODE_ELS = 7 + (NUM_CLASSES * 2);

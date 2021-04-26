@@ -1,6 +1,8 @@
 #ifndef __DECISION_TREE_COMMON
 #define __DECISION_TREE_COMMON
 
+#define MAX_UINT16 65535
+
 #include <cu_utils.hpp>
 
 __device__ float compute_feature(Array3d<uint16>& img_depth, int img_idx, int2 coord, float2 u, float2 v) {
