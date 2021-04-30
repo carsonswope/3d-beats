@@ -1,5 +1,5 @@
 import py_nvcc_utils
-
+import json
 import numpy as np
 from PIL import Image
 
@@ -14,11 +14,23 @@ MAX_UINT16 = np.uint16(65535) # max for 16 bit unsigned
 # image size
 # mapping from label colors to int IDs
 class DecisionTreeDatasetConfig():
-    def __init__(self, img_dims, id_map):
-        self.img_dims = np.array(img_dims, dtype=np.int)
-        # 0 ID is always transparent
-        id_map[0] = (0, 0, 0, 0)
-        self.id_to_color = {i : np.array(c, dtype=np.uint16) for (i,c) in id_map.items()}
+
+    def __init__(self, dataset_dir):
+
+        self.dataset_dir = dataset_dir
+        cfg = json.loads(open(dataset_dir + 'config.json').read())
+
+        self.img_dims = tuple(cfg['img_dims'])
+        self.id_to_color = {0: np.array([0, 0, 0, 0], dtype=np.uint8)}
+        for i,c in cfg['id_to_color'].items():
+            self.id_to_color[int(i)] = np.array(c, dtype=np.uint8)
+        
+        self.num_train = cfg['num_train']
+        self.num_test = cfg['num_test']
+
+        self.train = DecisionTreeDataset(dataset_dir + 'train', self.num_train, self)
+        self.test = DecisionTreeDataset(dataset_dir + 'test', self.num_test, self)
+
     
     def num_classes(self):
         return len(self.id_to_color)
