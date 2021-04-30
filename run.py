@@ -23,24 +23,31 @@ decision_tree_evaluator = DecisionTreeEvaluator()
 print('loading training data')
 decision_tree_dataset_config = DecisionTreeDatasetConfig(
     # image dims
-    (424, 240),
+    (848, 480),
     # ID to COLOR mapping
-    { 1: (255, 0, 0, 255),
-    2: (0, 0, 255, 255),
-    3: (0, 255, 0, 255),
-    4: (124, 30, 255, 255) })
+    {
+        1: (0, 0, 255, 255),
+        2: (0, 255, 0, 255),
+        3: (84, 9, 255, 255),
+        4: (255, 0, 0, 255),
+        5: (255, 165, 9, 255)
+        # 1: (255, 0, 0, 255),
+        # 2: (0, 0, 255, 255),
+        # 3: (0, 255, 0, 255),
+        # 4: (84, 9, 255, 255)
+    })
 
-TRAIN = 'datagen/gen_4class/train'
-NUM_TRAIN = 4096
+TRAIN = 'datagen/genstereo/train'
+NUM_TRAIN = 1024
 train_data = DecisionTreeDataset(TRAIN, NUM_TRAIN, decision_tree_dataset_config)
 
-TEST = 'datagen/gen_4class/test'
+TEST = 'datagen/genstereo/train'
 NUM_TEST = 128
 test_data = DecisionTreeDataset(TEST, NUM_TEST, decision_tree_dataset_config)
 
 print('allocating GPU memory')
 NUM_RANDOM_FEATURES = 128
-MAX_TREE_DEPTH = 14
+MAX_TREE_DEPTH = 19
 tree1 = DecisionTree(MAX_TREE_DEPTH, decision_tree_dataset_config.num_classes())
 decision_tree_trainer.allocate(train_data, NUM_RANDOM_FEATURES, tree1.max_depth)
 
@@ -52,7 +59,7 @@ best_trees = [None for t in range(TREES_IN_FOREST)]
 tree_cpu = np.zeros((tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
 forest_cpu = np.zeros((TREES_IN_FOREST, tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
 
-for i in range(10):
+for i in range(16):
     print('training tree..')
     decision_tree_trainer.train(train_data, tree1)
 

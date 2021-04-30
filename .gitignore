@@ -3,3 +3,6 @@ build
 .vscode
 evals
 __pycache__
+datagen/gen
+datagen/genstereo
+datagen/gen_4class

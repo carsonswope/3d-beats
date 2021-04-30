@@ -175,12 +175,13 @@ class DecisionTreeEvaluator():
 # TODO: modify these thresholds during the training process..
 # but how?
 
-FEATURE_MAGNITUDE_MAX = 500000.
-FEATURE_THRESHOLD_MAX = 1000. # _MIN = -_MAX
+FEATURE_MAGNITUDE_MAX = 14.
+FEATURE_THRESHOLD_MAX = 11. # _MIN = -_MAX
 
 def make_random_offset():
     f_theta = np.random.uniform(0, np.pi*2)
-    magnitude = np.random.uniform(0, FEATURE_MAGNITUDE_MAX)
+    # sample linearly in log space :)
+    magnitude = np.power(np.e, np.random.uniform(0, FEATURE_MAGNITUDE_MAX))
     return np.array([np.cos(f_theta), np.sin(f_theta)]) * magnitude
 
 def make_random_feature():
@@ -188,7 +189,7 @@ def make_random_feature():
 
 # how about this threshold?
 def make_random_threshold():
-    return np.random.uniform(-FEATURE_THRESHOLD_MAX, FEATURE_THRESHOLD_MAX)
+    return np.random.choice([-1, 1]) * np.power(np.e, np.random.uniform(0, FEATURE_THRESHOLD_MAX))
 
 def make_random_features(n):
     proposal_features = [(make_random_feature(), make_random_threshold()) for i in range(n)]
