@@ -15,7 +15,7 @@ MAX_UINT16 = np.uint16(65535) # max for 16 bit unsigned
 # mapping from label colors to int IDs
 class DecisionTreeDatasetConfig():
 
-    def __init__(self, dataset_dir):
+    def __init__(self, dataset_dir, load_train=True, load_test=True):
 
         self.dataset_dir = dataset_dir
         cfg = json.loads(open(dataset_dir + 'config.json').read())
@@ -28,8 +28,15 @@ class DecisionTreeDatasetConfig():
         self.num_train = cfg['num_train']
         self.num_test = cfg['num_test']
 
-        self.train = DecisionTreeDataset(dataset_dir + 'train', self.num_train, self)
-        self.test = DecisionTreeDataset(dataset_dir + 'test', self.num_test, self)
+        if load_train:
+            self.train = DecisionTreeDataset(dataset_dir + 'train', self.num_train, self)
+        else:
+            self.train = None
+
+        if load_test:
+            self.test = DecisionTreeDataset(dataset_dir + 'test', self.num_test, self)
+        else:
+            self.test = None
 
     
     def num_classes(self):
@@ -124,6 +131,19 @@ class DecisionTree():
         return (TOTAL_TREE_NODES, MAX_LEAF_NODES, TREE_NODE_ELS)
 
 class DecisionForest():
+    @staticmethod
+    def load(model_filename):
+        forest_cpu = np.load(model_filename)
+
+        num_trees = forest_cpu.shape[0]
+        tree_depth = int(np.log2(forest_cpu.shape[1] + 1))
+        num_classes = (forest_cpu.shape[2] - 7) // 2
+
+        f = DecisionForest(num_trees, tree_depth, num_classes)
+        f.forest_cu.set(forest_cpu)
+
+        return f
+
     def __init__(self, num_trees, max_depth, num_classes):
         self.num_trees = num_trees
         self.max_depth = max_depth

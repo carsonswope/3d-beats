@@ -4,16 +4,12 @@ from PIL import Image
 import pycuda.driver as cu
 import pycuda.autoinit
 import pycuda.gpuarray as cu_array
-from pycuda.compiler import SourceModule
-
-import py_nvcc_utils
 
 from decision_tree import *
 
 import os
 
 np.set_printoptions(suppress=True)
-MAX_THREADS_PER_BLOCK = 1024 # cuda constant..
 MAX_UINT16 = np.uint16(65535) # max for 16 bit unsigned
 
 print('compiling CUDA kernels..')
@@ -25,7 +21,7 @@ dataset = DecisionTreeDatasetConfig('datagen/genstereo/')
 
 
 print('allocating GPU memory')
-NUM_RANDOM_FEATURES = 128
+NUM_RANDOM_FEATURES = 256
 MAX_TREE_DEPTH = 18
 tree1 = DecisionTree(MAX_TREE_DEPTH, dataset.num_classes())
 decision_tree_trainer.allocate(dataset.train, NUM_RANDOM_FEATURES, tree1.max_depth)
@@ -38,7 +34,7 @@ best_trees = [None for t in range(TREES_IN_FOREST)]
 tree_cpu = np.zeros((tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
 forest_cpu = np.zeros((TREES_IN_FOREST, tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
 
-for i in range(4):
+for i in range(8):
     print('training tree..')
     decision_tree_trainer.train(dataset.train, tree1)
 
@@ -77,9 +73,14 @@ test_output_labels = test_output_labels_cu.get()
 pct_match =  np.sum(test_output_labels == dataset.test.labels) / np.sum(dataset.test.labels > 0)
 print('FOREST pct. matching pixels: ', pct_match)
 
+print('saving model output!')
+np.save('models_out/model.npy', forest_cpu)
+
+"""
 print('saving forest renders..')
 test_output_labels_render = dataset.convert_ids_to_colors(test_output_labels)
 for i in range(dataset.num_test):
     out_labels_img = test_output_labels_render[i]
     im = Image.fromarray(out_labels_img)
     im.save('evals/eval_labels_' + str(i).zfill(8) + '.png')
+"""
