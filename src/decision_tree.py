@@ -1,4 +1,4 @@
-import py_nvcc_utils
+import cuda.py_nvcc_utils as py_nvcc_utils
 import json
 import numpy as np
 from PIL import Image

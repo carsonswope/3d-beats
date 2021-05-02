@@ -8,6 +8,10 @@ typedef unsigned short uint16;
 typedef unsigned int uint32;
 typedef unsigned long long uint64;
 
+struct _mat4 {
+    float m[16];
+};
+
 template<typename T>
 class BinaryTree {
 private:

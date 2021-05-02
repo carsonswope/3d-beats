@@ -27,16 +27,14 @@ device = pipeline_profile.get_device()
 
 device.first_depth_sensor().set_option(rs.option.depth_units, 0.0001)
 
-device_product_line = str(device.get_info(rs.camera_info.product_line))
-
 config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 30)
+
 
 depth_image_cu = cu_array.GPUArray((1, 480, 848), dtype=np.uint16)
 labels_image_cu = cu_array.GPUArray((1, 480, 848), dtype=np.uint16)
-# labels_image_cpu_rgba = np.zeros((1, 480, 848, 4), dtype=np.uint8)
 
-# Start streaming
-pipeline.start(config)
+profile = pipeline.start(config)
+depth_profile = profile.get_stream(rs.stream.depth).as_video_stream_profile()
 
 try:
 
@@ -47,10 +45,10 @@ try:
         # Wait for a coherent pair of frames: depth and color
         frames = pipeline.wait_for_frames()
         depth_frame = frames.get_depth_frame()
-        # color_frame = frames.get_color_frame()
         if not depth_frame:
-            print(' nod ept?')
             continue
+
+        """
 
         # Convert images to numpy arrays
         depth_image_f = np.asanyarray(depth_frame.get_data()).astype(np.float32)
@@ -69,10 +67,13 @@ try:
 
         cv2.namedWindow('RealSense', cv2.WINDOW_AUTOSIZE)
         cv2.imshow('RealSense', labels_image_cpu_bgra)
+
+        """
+
+
+        
         cv2.waitKey(1)
 
-        # i += 1
-        # print(i)
 
 finally:
 
