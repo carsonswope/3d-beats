@@ -1,6 +1,9 @@
 #ifndef __CU_UTILS
 #define __CU_UTILS
 
+// #define GLM_FORCE_CUDA
+#include <glm/glm.hpp>
+
 typedef unsigned short uint16;
 typedef unsigned int uint32;
 typedef unsigned long long uint64;

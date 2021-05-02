@@ -157,7 +157,7 @@ class DecisionForest():
     # def eval()
 class DecisionTreeEvaluator():
     def __init__(self):
-        cu_mod = py_nvcc_utils.get_module('tree_eval.cu')
+        cu_mod = py_nvcc_utils.get_module('src/cuda/tree_eval.cu')
         self.cu_eval_image = cu_mod.get_function('evaluate_image_using_tree')
         self.cu_eval_image_forest = cu_mod.get_function('evaluate_image_using_forest')
     
@@ -230,7 +230,7 @@ def make_random_features(n):
 class DecisionTreeTrainer():
     def __init__(self):
         # first load kernels..
-        cu_mod = py_nvcc_utils.get_module('tree_train.cu')
+        cu_mod = py_nvcc_utils.get_module('src/cuda/tree_train.cu')
         self.cu_eval_random_features = cu_mod.get_function('evaluate_random_features')
         self.cu_pick_best_features = cu_mod.get_function('pick_best_features')
         self.cu_copy_pixel_groups = cu_mod.get_function('copy_pixel_groups')

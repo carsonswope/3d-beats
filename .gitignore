@@ -7,3 +7,5 @@ datagen/gen
 datagen/genstereo
 datagen/gen_4class
 models_out
+
+src/cuda/deps/glm
