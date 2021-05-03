@@ -171,6 +171,15 @@ try:
             grid=grid_dim2,
             block=block_dim2)
 
+        if frame_num == 200:
+            print('soon..')
+        if frame_num == 250:
+            print('this frame saved')
+            di = depth_image_cu.get().reshape((DIM_Y, DIM_X))
+            di[di == 65535] = 0
+            di_i = Image.fromarray(di)
+            di_i.save('live_depth_filtered2.png')
+
         labels_image_cu.fill(np.uint16(65535))
         decision_tree_evaluator.get_labels_forest(forest, depth_image_cu, labels_image_cu)
 

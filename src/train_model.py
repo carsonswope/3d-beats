@@ -17,12 +17,12 @@ decision_tree_trainer = DecisionTreeTrainer()
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading training data')
-dataset = DecisionTreeDatasetConfig('datagen/genstereo-filterable/')
+dataset = DecisionTreeDatasetConfig('datagen/sets/flat-hand/')
 
 
 print('allocating GPU memory')
-NUM_RANDOM_FEATURES = 256
-MAX_TREE_DEPTH = 18
+NUM_RANDOM_FEATURES = 1024
+MAX_TREE_DEPTH = 16
 tree1 = DecisionTree(MAX_TREE_DEPTH, dataset.num_classes())
 decision_tree_trainer.allocate(dataset.train, NUM_RANDOM_FEATURES, tree1.max_depth)
 

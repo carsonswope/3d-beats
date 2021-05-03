@@ -15,7 +15,8 @@ np.set_printoptions(suppress=True)
 
 points_ops = PointsOps()
 
-d = np.array(Image.open('./datagen/genstereo-filterable/train00000000_depth.png')).astype(np.uint16)
+d = np.array(Image.open('./live_depth_filtered2.png')).astype(np.uint16)
+# d = np.array(Image.open('./datagen/genstereo-filterable/train00000000_depth.png')).astype(np.uint16)
 d_cu = cu_array.to_gpu(d)
 
 DIM_X = 848
