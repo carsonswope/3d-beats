@@ -10,13 +10,13 @@ from decision_tree import *
 np.set_printoptions(suppress=True)
 
 print('loading forest')
-forest = DecisionForest.load('models_out/model.npy')
+forest = DecisionForest.load('models_out/model-filtered.npy')
 
 print('compiling CUDA kernels..')
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading training data')
-dataset = DecisionTreeDatasetConfig('datagen/genstereo/', load_train=False, load_test=True)
+dataset = DecisionTreeDatasetConfig('datagen/genstereo-filterable/', load_train=False, load_test=True)
 
 # evaluating forest!
 print('evaluating forest..')

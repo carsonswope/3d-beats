@@ -6,6 +6,7 @@ __pycache__
 datagen/gen
 datagen/genstereo
 datagen/gen_4class
+datagen/genstereo-filterable
 models_out
 
 src/cuda/deps/glm

@@ -78,7 +78,7 @@ class DecisionTreeDataset():
     # t: DEPTH or LABELS (type)
     @staticmethod
     def __data_path(s, t, i):
-        return s + '_' + str(i).zfill(8) + '_' + t + '.png'
+        return s + '' + str(i).zfill(8) + '_' + t + '.png'
 
     def load_data(self, s, num):
         all_depth = np.zeros((num, self.config.img_dims[1], self.config.img_dims[0]), dtype='uint16')

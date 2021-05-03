@@ -15,7 +15,7 @@ np.set_printoptions(suppress=True)
 
 points_ops = PointsOps()
 
-d = np.array(Image.open('./datagen/d.png')).astype(np.uint16)
+d = np.array(Image.open('./datagen/genstereo-filterable/train00000000_depth.png')).astype(np.uint16)
 d_cu = cu_array.to_gpu(d)
 
 DIM_X = 848
@@ -75,7 +75,7 @@ for j in range(NUM_RANDOM_GUESSES):
 
 candidate_planes_cu = cu_array.to_gpu(candidate_planes)
 
-PLANE_Z_OUTLIER_THRESHOLD = 100
+PLANE_Z_OUTLIER_THRESHOLD = 150
 
 num_inliers_cu = cu_array.GPUArray((NUM_RANDOM_GUESSES), dtype=np.int32)
 num_inliers_cu.fill(np.int32(0))
@@ -107,8 +107,9 @@ points_ops.transform_points(
     grid=grid_dim2,
     block=block_dim2)
 
-PLANE_Z_FILTER_THRESHOLD = 150.
+PLANE_Z_FILTER_THRESHOLD = 15.
 
+"""
 points_ops.filter_points_by_plane(
     np.int32(DIM_X * DIM_Y),
     np.float32(PLANE_Z_FILTER_THRESHOLD),
@@ -116,6 +117,7 @@ points_ops.filter_points_by_plane(
     grid=grid_dim2,
     block=block_dim2)
 
+"""
 pts_cpu = pts_cu.get()
 
 

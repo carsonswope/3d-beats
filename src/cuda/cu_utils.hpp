@@ -2,6 +2,7 @@
 #define __CU_UTILS
 
 // #define GLM_FORCE_CUDA
+#define GLM_SWIZZLE 
 #include <glm/glm.hpp>
 
 typedef unsigned short uint16;

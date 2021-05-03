@@ -17,7 +17,7 @@ decision_tree_trainer = DecisionTreeTrainer()
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading training data')
-dataset = DecisionTreeDatasetConfig('datagen/genstereo/')
+dataset = DecisionTreeDatasetConfig('datagen/genstereo-filterable/')
 
 
 print('allocating GPU memory')
@@ -74,7 +74,7 @@ pct_match =  np.sum(test_output_labels == dataset.test.labels) / np.sum(dataset.
 print('FOREST pct. matching pixels: ', pct_match)
 
 print('saving model output!')
-np.save('models_out/model.npy', forest_cpu)
+np.save('models_out/model-filtered.npy', forest_cpu)
 
 """
 print('saving forest renders..')

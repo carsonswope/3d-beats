@@ -74,14 +74,6 @@ void find_plane_ransac(
     }
 }}
 
-/*
-
-    np.int32(DIM_X * DIM_Y),
-    np.float32(PLANE_Z_FILTER_THRESHOLD),
-    pts_cu,
-    plane
-
-    */
 
 extern "C" {__global__
 void filter_points_by_plane(
@@ -95,8 +87,6 @@ void filter_points_by_plane(
     const auto pt = pts[i];
     if (pt.w != 1.) return;
 
-    // const auto new_pt = glm::transpose(plane_tform) * pt;
-
     if (pt.z > -PLANE_Z_FILTER_THRESHOLD) {
         pts[i].x = 0.;
         pts[i].y = 0.;
@@ -105,3 +95,69 @@ void filter_points_by_plane(
     }
     
 }}
+
+
+extern "C" {__global__
+void make_plane_candidates(
+        int NUM_CANDIDATES,
+        int IMG_DIM_X,
+        int IMG_DIM_Y,
+        float* _rand,
+        glm::vec4* pts,
+        glm::mat4* plane_candidates){
+
+    const int i = (blockIdx.x * blockDim.x) + threadIdx.x;
+    if (i >= NUM_CANDIDATES) return;
+
+    Array2d<float> rand_arr(_rand, {NUM_CANDIDATES, 32});
+    
+    glm::vec4 plane_pts[3];
+    int plane_pts_set = 0;
+    int rand_j = 0;
+
+    while (plane_pts_set < 3 && rand_j < 32) {
+        int r = __float2int_rd(rand_arr.get({i, rand_j}) * IMG_DIM_X * IMG_DIM_Y);
+        glm::vec4 p = pts[r];
+        if (p.z > 0.) {
+            plane_pts[plane_pts_set++] = p;
+        }
+        rand_j++;
+    }
+
+    glm::vec3 v0 = glm::normalize((plane_pts[1] - plane_pts[0]).xyz());
+    glm::vec3 v1 = glm::normalize((plane_pts[2] - plane_pts[0]).xyz());
+
+    glm::vec3 z_axis = glm::normalize(glm::cross(v0, v1));
+    glm::vec3 x_axis = v0;
+    glm::vec3 y_axis = glm::normalize(glm::cross(z_axis, x_axis));
+
+    glm::mat4 tf_mat = glm::mat4(1.f);
+    tf_mat[0] = glm::vec4{x_axis, 0.f};
+    tf_mat[1] = glm::vec4{y_axis, 0.f};
+    tf_mat[2] = glm::vec4{z_axis, 0.f};
+    tf_mat[3] = glm::vec4{-plane_pts[0].xyz(), 1.f};
+
+    plane_candidates[i] = glm::transpose(tf_mat);
+
+}}
+
+
+extern "C" {__global__
+void setup_depth_image_for_forest(
+        int NUM_PIXELS,
+        glm::vec4* pts,
+        uint16* depth) {
+
+    const int i = (blockIdx.x * blockDim.x) + threadIdx.x;
+    if (i >= NUM_PIXELS) return;
+
+    const uint16 d = depth[i];
+    const glm::vec4 p = pts[i];
+
+    if (d == 0 || p.w == 0) {
+        depth[i] = 65535;
+    }
+
+}}
+
+// setup_depth_image_for_forest
