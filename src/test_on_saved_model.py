@@ -16,7 +16,7 @@ print('compiling CUDA kernels..')
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading training data')
-dataset = DecisionTreeDatasetConfig('datagen/sets/flat-hand/', load_train=False, load_test=True)
+dataset = DecisionTreeDatasetConfig('datagen/sets/hand-scale/', load_train=False, load_test=True)
 
 # evaluating forest!
 print('evaluating forest..')
