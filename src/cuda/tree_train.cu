@@ -229,7 +229,6 @@ void copy_pixel_groups(
         int NUM_CLASSES,
         uint16* _img_depth,
         int* nodes_by_pixel, // -1 means not active
-        int* next_nodes_by_pixel,
         float* _tree_so_far) {
 
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -263,9 +262,10 @@ void copy_pixel_groups(
     const bool is_left_node = f_val < f_thresh;
     const int node_status = __float2int_rd(tree_node_ptr[is_left_node ? 5 : 6]);
     // If child node is labeled -1, that means the child node is active!
-    if (node_status != -1) return;
-
-    const int next_node = (i_parent_node * 2) + (is_left_node ? 0 : 1);
-    next_nodes_by_pixel[i] = next_node;
-
+    if (node_status != -1) {
+        nodes_by_pixel[i] = -1;
+    } else {
+        const int next_node = (i_parent_node * 2) + (is_left_node ? 0 : 1);
+        nodes_by_pixel[i] = next_node;
+    }
 }}

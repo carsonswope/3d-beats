@@ -252,7 +252,7 @@ class DecisionTreeTrainer():
 
         self.nodes_by_pixel = np.zeros(dataset.images_shape(), dtype=np.int32)
         self.nodes_by_pixel_cu = cu_array.to_gpu(self.nodes_by_pixel)
-        self.next_nodes_by_pixel_cu = cu_array.to_gpu(self.nodes_by_pixel)
+        # self.next_nodes_by_pixel_cu = cu_array.to_gpu(self.nodes_by_pixel)
 
         self.active_nodes_cu = cu_array.GPUArray((self.MAX_LEAF_NODES), dtype=np.int32)
         self.next_active_nodes_cu = cu_array.GPUArray((self.MAX_LEAF_NODES), dtype=np.int32)
@@ -262,6 +262,15 @@ class DecisionTreeTrainer():
 
         # random proposal features
         self.proposal_features_cu = cu_array.GPUArray((self.NUM_RANDOM_FEATURES, 5), dtype=np.float32)
+
+        training_allocation = (self.node_counts_cu.size * self.node_counts_cu.itemsize) + \
+            (self.next_node_counts_cu.size * self.next_node_counts_cu.itemsize) + \
+            (self.next_node_counts_by_feature_cu.size * self.next_node_counts_by_feature_cu.itemsize) + \
+            (self.nodes_by_pixel_cu.size * self.nodes_by_pixel_cu.itemsize) + \
+            (self.active_nodes_cu.size * self.active_nodes_cu.itemsize) + \
+            (self.next_active_nodes_cu.size * self.next_active_nodes_cu.itemsize)
+
+        print('GPU arrays allocated for training. Memory used: ' '{:,}'.format(training_allocation))
 
     def train(self, dataset, tree):
 
@@ -341,8 +350,6 @@ class DecisionTreeTrainer():
 
             self.node_counts_cu.set(self.next_node_counts_cu)
 
-            self.next_nodes_by_pixel_cu.fill(np.int32(-1))
-
             copy_grid_dim = (int(dataset.num_pixels() // MAX_THREADS_PER_BLOCK) + 1, 1, 1)
             copy_block_dim = (MAX_THREADS_PER_BLOCK, 1, 1)
 
@@ -355,11 +362,9 @@ class DecisionTreeTrainer():
                 np.int32(dataset.config.num_classes()),
                 dataset.depth_cu,
                 self.nodes_by_pixel_cu,
-                self.next_nodes_by_pixel_cu,
                 tree.tree_out_cu,
                 grid = copy_grid_dim, block=copy_block_dim)
 
-            self.nodes_by_pixel_cu.set(self.next_nodes_by_pixel_cu)
             self.active_nodes_cu.set(self.next_active_nodes_cu)
 
         # err, return
