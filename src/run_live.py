@@ -14,7 +14,7 @@ import time
 
 print('loading forest')
 forest = DecisionForest.load('models_out/model-filtered.npy')
-data_config = DecisionTreeDatasetConfig('datagen/genstereo/', load_test=False, load_train=False)
+data_config = DecisionTreeDatasetConfig('datagen/sets/hand-scale/', load_test=False, load_train=False)
 
 print('compiling CUDA kernels..')
 decision_tree_evaluator = DecisionTreeEvaluator()
@@ -60,7 +60,7 @@ labels_image_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
 profile = pipeline.start(config)
 depth_profile = profile.get_stream(rs.stream.depth).as_video_stream_profile()
 
-PLANE_Z_OUTLIER_THRESHOLD = 80.
+PLANE_Z_OUTLIER_THRESHOLD = 40.
 
 rand_generator = cu_rand.XORWOWRandomNumberGenerator(seed_getter=cu_rand.seed_getter_unique)
 rand_cu = cu_array.GPUArray((NUM_RANDOM_GUESSES, 32), dtype=np.float32)
@@ -170,15 +170,6 @@ try:
             depth_image_cu,
             grid=grid_dim2,
             block=block_dim2)
-
-        if frame_num == 200:
-            print('soon..')
-        if frame_num == 250:
-            print('this frame saved')
-            di = depth_image_cu.get().reshape((DIM_Y, DIM_X))
-            di[di == 65535] = 0
-            di_i = Image.fromarray(di)
-            di_i.save('live_depth_filtered2.png')
 
         labels_image_cu.fill(np.uint16(65535))
         decision_tree_evaluator.get_labels_forest(forest, depth_image_cu, labels_image_cu)

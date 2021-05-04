@@ -17,10 +17,10 @@ decision_tree_trainer = DecisionTreeTrainer()
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading training data')
-dataset = DecisionTreeDatasetConfig('datagen/sets/hand-scale/')
+dataset = DecisionTreeDatasetConfig('datagen/sets/set1/')
 
 print('allocating GPU memory')
-NUM_RANDOM_FEATURES = 512
+NUM_RANDOM_FEATURES = 128
 MAX_TREE_DEPTH = 16
 tree1 = DecisionTree(MAX_TREE_DEPTH, dataset.num_classes())
 decision_tree_trainer.allocate(dataset.train, NUM_RANDOM_FEATURES, tree1.max_depth)
@@ -73,7 +73,7 @@ pct_match =  np.sum(test_output_labels == dataset.test.labels) / np.sum(dataset.
 print('FOREST pct. matching pixels: ', pct_match)
 
 print('saving model output!')
-np.save('models_out/model-filtered.npy', forest_cpu)
+np.save('models_out/model-filtered-per-finger.npy', forest_cpu)
 
 """
 print('saving forest renders..')

@@ -10,13 +10,13 @@ from decision_tree import *
 np.set_printoptions(suppress=True)
 
 print('loading forest')
-forest = DecisionForest.load('models_out/model-filtered.npy')
+forest = DecisionForest.load('models_out/model-filtered-per-finger.npy')
 
 print('compiling CUDA kernels..')
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading training data')
-dataset = DecisionTreeDatasetConfig('datagen/sets/hand-scale/', load_train=False, load_test=True)
+dataset = DecisionTreeDatasetConfig('datagen/sets/set1/', load_train=False, load_test=True)
 
 # evaluating forest!
 print('evaluating forest..')

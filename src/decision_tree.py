@@ -28,13 +28,17 @@ class DecisionTreeDatasetConfig():
         self.num_train = cfg['num_train']
         self.num_test = cfg['num_test']
 
+        arr_size = lambda x: x.size * x.itemsize
+
         if load_train:
             self.train = DecisionTreeDataset(dataset_dir + 'train', self.num_train, self)
+            print(self.num_train, 'training images loaded. GPU memory used: ', '{:,}'.format(arr_size(self.train.depth_cu) + arr_size(self.train.labels_cu)))
         else:
             self.train = None
 
         if load_test:
             self.test = DecisionTreeDataset(dataset_dir + 'test', self.num_test, self)
+            print(self.num_test, 'test images loaded.   GPU memory used: ', '{:,}'.format(arr_size(self.test.depth_cu) + arr_size(self.test.labels_cu)))
         else:
             self.test = None
 
@@ -81,8 +85,8 @@ class DecisionTreeDataset():
         return s + '' + str(i).zfill(8) + '_' + t + '.png'
 
     def load_data(self, s, num):
-        all_depth = np.zeros((num, self.config.img_dims[1], self.config.img_dims[0]), dtype='uint16')
-        all_labels = np.zeros((num, self.config.img_dims[1], self.config.img_dims[0]), dtype='uint16')
+        all_depth = np.zeros((num, self.config.img_dims[1], self.config.img_dims[0]), dtype=np.uint16)
+        all_labels = np.zeros((num, self.config.img_dims[1], self.config.img_dims[0]), dtype=np.uint16)
 
         DEPTH = 'depth'
         LABELS = 'labels'
@@ -90,16 +94,11 @@ class DecisionTreeDataset():
         for i in range(num):
             depth_img = Image.open(DecisionTreeDataset.__data_path(s, DEPTH, i))
             labels_img = Image.open(DecisionTreeDataset.__data_path(s, LABELS, i))
-
             assert np.all(depth_img.size == self.config.img_dims)
             assert np.all(labels_img.size == self.config.img_dims)
-
             all_depth[i,:,:] = depth_img
-            all_labels[i,:,:] = self.config.convert_colors_to_ids(np.array(labels_img))
+            all_labels[i,:,:] = labels_img
 
-        # convert 0 entries in depth image to max value
-        all_depth[np.where(all_depth == 0)] = MAX_UINT16
-        
         return all_depth, all_labels
 
     def num_pixels(self):
