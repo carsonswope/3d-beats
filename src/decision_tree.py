@@ -252,8 +252,7 @@ class DecisionTreeTrainer():
 
         self.nodes_by_pixel = np.zeros(dataset.images_shape(), dtype=np.int32)
         self.nodes_by_pixel_cu = cu_array.to_gpu(self.nodes_by_pixel)
-        # self.next_nodes_by_pixel_cu = cu_array.to_gpu(self.nodes_by_pixel)
-
+        
         self.active_nodes_cu = cu_array.GPUArray((self.MAX_LEAF_NODES), dtype=np.int32)
         self.next_active_nodes_cu = cu_array.GPUArray((self.MAX_LEAF_NODES), dtype=np.int32)
 
@@ -308,6 +307,10 @@ class DecisionTreeTrainer():
             grid_dim = (int(dataset.num_pixels() // BLOCK_DIM_X) + 1, 1, 1)
             block_dim = (BLOCK_DIM_X, int(self.NUM_RANDOM_FEATURES), 1)
 
+            # for each feature block:
+            #   for each image block:
+            #      generate next_node_counts_by_feature
+
             self.cu_eval_random_features(
                 np.int32(dataset.num_images),
                 np.int32(dataset.config.img_dims[0]),
@@ -329,6 +332,10 @@ class DecisionTreeTrainer():
             self.next_active_nodes_cu.fill(np.int32(0))
             self.next_num_active_nodes_cu.fill(np.int32(0))
 
+            # per feature block:
+            #   determine best gini gain feature for each node
+            #   write the tree out accordingly
+
             self.cu_pick_best_features(
                 np.int32(num_active_nodes),
                 np.int32(self.NUM_RANDOM_FEATURES),
@@ -341,6 +348,7 @@ class DecisionTreeTrainer():
                 self.proposal_features_cu,
                 tree.tree_out_cu,
                 self.next_node_counts_cu,
+                # 2nd kernel after all feature guesses blocks have been analyzed: given final tree for this level, make list of nodes that are active for the next level
                 self.next_active_nodes_cu,
                 self.next_num_active_nodes_cu,
                 grid=pick_best_grid_dim, block=pick_best_block_dim)
@@ -352,6 +360,8 @@ class DecisionTreeTrainer():
 
             copy_grid_dim = (int(dataset.num_pixels() // MAX_THREADS_PER_BLOCK) + 1, 1, 1)
             copy_block_dim = (MAX_THREADS_PER_BLOCK, 1, 1)
+
+            # per image block
 
             self.cu_copy_pixel_groups(
                 np.int32(dataset.num_images),
