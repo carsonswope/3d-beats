@@ -17,7 +17,7 @@ decision_tree_trainer = DecisionTreeTrainer()
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading training data')
-dataset = DecisionTreeDatasetConfig('datagen/sets/set2/')
+dataset = DecisionTreeDatasetConfig('datagen/sets/set3/')
 
 print('allocating GPU memory')
 NUM_RANDOM_FEATURES = 256
@@ -33,16 +33,24 @@ best_trees = [None for t in range(TREES_IN_FOREST)]
 tree_cpu = np.zeros((tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
 forest_cpu = np.zeros((TREES_IN_FOREST, tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
 
-for i in range(8):
+test_labels_cpu = cu.pagelocked_zeros(dataset.test.images_shape(), dtype=np.uint16)
+dataset.test.get_labels(0, test_labels_cpu)
+
+test_depth_cpu = cu.pagelocked_zeros(dataset.test.images_shape(), dtype=np.uint16)
+dataset.test.get_depth(0, test_depth_cpu)
+test_depth_cu = cu_array.GPUArray(dataset.test.images_shape(), dtype=np.uint16)
+test_depth_cu.set(test_depth_cpu)
+
+for i in range(4):
     print('training tree..')
     decision_tree_trainer.train(dataset.train, tree1)
 
     print('evaluating..')
-    test_output_labels_cu.fill(np.uint16(MAX_UINT16)) # doesnt attempt to reclassify when there is no pixel. makes it easier when computing pct match when 0 != 65535
-    decision_tree_evaluator.get_labels(tree1, dataset.test.depth_cu, test_output_labels_cu)
+    test_output_labels_cu.fill(MAX_UINT16) # doesnt attempt to reclassify when there is no pixel. makes it easier when computing pct match when 0 != 65535
+    decision_tree_evaluator.get_labels(tree1, test_depth_cu, test_output_labels_cu)
     test_output_labels = test_output_labels_cu.get()
     # test_output_labels[np.where(test_output_labels == 0)] = 65535 # make sure 0s dont match
-    pct_match =  np.sum(test_output_labels == dataset.test.labels) / np.sum(dataset.test.labels > 0)
+    pct_match =  np.sum(test_output_labels == test_labels_cpu) / np.sum(test_labels_cpu > 0)
     print('pct. matching pixels: ', pct_match)
 
     copy_idx = -1
@@ -66,10 +74,10 @@ forest1.forest_cu.set(forest_cpu)
 # evaluating forest!
 print('evaluating forest..')
 test_output_labels_cu.fill(np.uint16(MAX_UINT16))
-decision_tree_evaluator.get_labels_forest(forest1, dataset.test.depth_cu, test_output_labels_cu)
+decision_tree_evaluator.get_labels_forest(forest1, test_depth_cu, test_output_labels_cu)
 
 test_output_labels = test_output_labels_cu.get()
-pct_match =  np.sum(test_output_labels == dataset.test.labels) / np.sum(dataset.test.labels > 0)
+pct_match =  np.sum(test_output_labels == test_labels_cpu) / np.sum(test_labels_cpu > 0)
 print('FOREST pct. matching pixels: ', pct_match)
 
 print('saving model output!')

@@ -14,7 +14,7 @@ import time
 
 print('loading forest')
 forest = DecisionForest.load('models_out/model-filtered.npy')
-data_config = DecisionTreeDatasetConfig('datagen/sets/set2/', load_test=False, load_train=False)
+data_config = DecisionTreeDatasetConfig('datagen/sets/set3/', load_test=False, load_train=False)
 
 print('compiling CUDA kernels..')
 decision_tree_evaluator = DecisionTreeEvaluator()

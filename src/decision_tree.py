@@ -2,9 +2,11 @@ import cuda.py_nvcc_utils as py_nvcc_utils
 import json
 import numpy as np
 from PIL import Image
+import imageio
+from io import BytesIO
 
 import pycuda.gpuarray as cu_array
-
+import pycuda.driver as cu
 
 MAX_THREADS_PER_BLOCK = 1024 # cuda constant..
 
@@ -31,14 +33,16 @@ class DecisionTreeDatasetConfig():
         arr_size = lambda x: x.size * x.itemsize
 
         if load_train:
-            self.train = DecisionTreeDataset(dataset_dir + 'train', self.num_train, self)
-            print(self.num_train, 'training images loaded. GPU memory used: ', '{:,}'.format(arr_size(self.train.depth_cu) + arr_size(self.train.labels_cu)))
+            self.train = DecisionTreeDataset(dataset_dir + 'train', self.num_train, self, load_cu=False)
+            # print(self.num_train, 'training images loaded. CPU Pagelocked memory used: ', '{:,}'.format(arr_size(self.train.depth) + arr_size(self.train.labels)))
+            # print(self.num_train, 'training images loaded. GPU memory used: ', '{:,}'.format(arr_size(self.train.depth_cu) + arr_size(self.train.labels_cu)))
         else:
             self.train = None
 
         if load_test:
-            self.test = DecisionTreeDataset(dataset_dir + 'test', self.num_test, self)
-            print(self.num_test, 'test images loaded.   GPU memory used: ', '{:,}'.format(arr_size(self.test.depth_cu) + arr_size(self.test.labels_cu)))
+            # load CU for test..
+            self.test = DecisionTreeDataset(dataset_dir + 'test', self.num_test, self, load_cu=True)
+            # print(self.num_test, 'test images loaded.   GPU memory used: ', '{:,}'.format(arr_size(self.test.depth_cu) + arr_size(self.test.labels_cu)))
         else:
             self.test = None
 
@@ -71,12 +75,41 @@ class DecisionTreeDatasetConfig():
         return labels_colors
 
 class DecisionTreeDataset():
-    def __init__(self, path_root, num_images, config):
+    def __init__(self, path_root, num_images, config, load_cu=True):
         self.num_images = num_images
         self.config = config
-        self.depth, self.labels = self.load_data(path_root, num_images)
-        self.depth_cu = cu_array.to_gpu(self.depth)
-        self.labels_cu = cu_array.to_gpu(self.labels)
+        # raw bytes in PNG format (compressed!)
+        self.all_depth_pngs, self.all_labels_pngs = self.load_data(path_root, num_images)
+
+        # if load_cu:
+            # self.depth_cu = cu_array.to_gpu(self.depth)
+            # self.labels_cu = cu_array.to_gpu(self.labels)
+
+    # fill up a (np.array(num_images, dimy, dimx)) with labels via decoding the PNG!
+    def get_labels(self, start_idx, a):
+        num_images = a.shape[0]
+        assert a.shape[1] == self.config.img_dims[1]
+        assert a.shape[2] == self.config.img_dims[0]
+
+        for i in range(num_images):
+            img_pixels = imageio.imread(BytesIO(self.all_labels_pngs[start_idx + i]))
+            # assert np.all(img_pixels == self.labels[start_idx + i])
+            assert img_pixels.shape[0] == a.shape[1]
+            assert img_pixels.shape[1] == a.shape[2]
+            a[i] = img_pixels
+
+    # fill up a (np.array(num_images, dimy, dimx)) with depth via decoding the PNG!
+    def get_depth(self, start_idx, a):
+        num_images = a.shape[0]
+        assert a.shape[1] == self.config.img_dims[1]
+        assert a.shape[2] == self.config.img_dims[0]
+
+        for i in range(num_images):
+            img_pixels = imageio.imread(BytesIO(self.all_depth_pngs[start_idx + i]))
+            # assert np.all(img_pixels == self.depth[start_idx + i])
+            assert img_pixels.shape[0] == a.shape[1]
+            assert img_pixels.shape[1] == a.shape[2]
+            a[i] = img_pixels
 
     # s: TEST or TRAIN (set)
     # t: DEPTH or LABELS (type)
@@ -85,21 +118,21 @@ class DecisionTreeDataset():
         return s + '' + str(i).zfill(8) + '_' + t + '.png'
 
     def load_data(self, s, num):
-        all_depth = np.zeros((num, self.config.img_dims[1], self.config.img_dims[0]), dtype=np.uint16)
-        all_labels = np.zeros((num, self.config.img_dims[1], self.config.img_dims[0]), dtype=np.uint16)
+        # store image data as raw PNG - takes up much less memory!
+        all_depth_pngs = []
+        all_labels_pngs = []
 
         DEPTH = 'depth'
         LABELS = 'labels'
 
         for i in range(num):
-            depth_img = Image.open(DecisionTreeDataset.__data_path(s, DEPTH, i))
-            labels_img = Image.open(DecisionTreeDataset.__data_path(s, LABELS, i))
-            assert np.all(depth_img.size == self.config.img_dims)
-            assert np.all(labels_img.size == self.config.img_dims)
-            all_depth[i,:,:] = depth_img
-            all_labels[i,:,:] = labels_img
+            
+            with open(DecisionTreeDataset.__data_path(s, DEPTH, i), 'rb') as f_png:
+                all_depth_pngs.append(f_png.read())
+            with open(DecisionTreeDataset.__data_path(s, LABELS, i), 'rb') as f_png:
+                all_labels_pngs.append(f_png.read())
 
-        return all_depth, all_labels
+        return all_depth_pngs, all_labels_pngs
 
     def num_pixels(self):
         return self.num_images * self.config.img_dims[0] * self.config.img_dims[1]
@@ -226,6 +259,25 @@ def make_random_features(n):
     proposal_features = [(make_random_feature(), make_random_threshold()) for i in range(n)]
     return np.array([(p[0][0][0], p[0][0][1], p[0][1][0], p[0][1][1], p[1]) for p in proposal_features ], dtype=np.float32)
 
+# convert np array to png bytes!
+def get_png_bytes(a):
+    assert a.dtype == np.int32
+    _o = BytesIO()
+    _i = Image.fromarray(a.view(np.uint8))
+    _i.save(_o, format='PNG')
+    return _o.getvalue()
+
+# convert multiple images to an array of bytes!
+def get_all_png_bytes(a):
+    assert len(a.shape) == 3
+    return [get_png_bytes(_a) for _a in a]
+
+def decode_all_pngs(pngs, out_a):
+    for i in range(len(pngs)):
+        img_pixels = imageio.imread(BytesIO(pngs[i]))
+        out_a[i] = img_pixels.view(np.int32)
+
+
 class DecisionTreeTrainer():
     def __init__(self):
         # first load kernels..
@@ -233,6 +285,10 @@ class DecisionTreeTrainer():
         self.cu_eval_random_features = cu_mod.get_function('evaluate_random_features')
         self.cu_pick_best_features = cu_mod.get_function('pick_best_features')
         self.cu_copy_pixel_groups = cu_mod.get_function('copy_pixel_groups')
+        self.get_active_nodes_next_level = cu_mod.get_function('get_active_nodes_next_level')
+
+        self.NUM_IMAGES_PER_IMAGE_BLOCK = 512
+        self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK = 128
 
     def allocate(self, dataset, NUM_RANDOM_FEATURES, MAX_TREE_DEPTH):
 
@@ -240,50 +296,67 @@ class DecisionTreeTrainer():
         self.NUM_RANDOM_FEATURES = NUM_RANDOM_FEATURES
         self.MAX_TREE_DEPTH = MAX_TREE_DEPTH
 
+        # make sure image blocks & feature blocks are all uniform size
+        assert dataset.num_images % self.NUM_IMAGES_PER_IMAGE_BLOCK == 0
+        assert self.NUM_RANDOM_FEATURES % self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK == 0
+
         _, self.MAX_LEAF_NODES, _ = DecisionTree.get_config(MAX_TREE_DEPTH, dataset.config.num_classes())
 
-        # allocate GPU space needed for training, given the configuration:
-        self.node_counts = np.zeros((self.MAX_LEAF_NODES, dataset.config.num_classes()), dtype=np.uint64)
-
+        self.node_counts = cu.pagelocked_zeros((self.MAX_LEAF_NODES, dataset.config.num_classes()), dtype=np.uint64)
         self.node_counts_cu = cu_array.to_gpu(self.node_counts)
         self.next_node_counts_cu = cu_array.to_gpu(self.node_counts)
-        self.next_node_counts_by_feature = np.zeros((self.NUM_RANDOM_FEATURES, self.MAX_LEAF_NODES, dataset.config.num_classes()), dtype=np.uint64)
-        self.next_node_counts_by_feature_cu = cu_array.to_gpu(self.next_node_counts_by_feature)
 
-        self.nodes_by_pixel = np.zeros(dataset.images_shape(), dtype=np.int32)
-        self.nodes_by_pixel_cu = cu_array.to_gpu(self.nodes_by_pixel)
-        
         self.active_nodes_cu = cu_array.GPUArray((self.MAX_LEAF_NODES), dtype=np.int32)
         self.next_active_nodes_cu = cu_array.GPUArray((self.MAX_LEAF_NODES), dtype=np.int32)
-
         self.next_num_active_nodes_cu = cu_array.GPUArray((1), dtype=np.int32)
         self.get_next_num_active_nodes = lambda : self.next_num_active_nodes_cu.get()[0]
 
-        # random proposal features
-        self.proposal_features_cu = cu_array.GPUArray((self.NUM_RANDOM_FEATURES, 5), dtype=np.float32)
+        self.best_gain_seen_per_node = cu_array.GPUArray((self.MAX_LEAF_NODES), dtype=np.float32)
 
-        training_allocation = (self.node_counts_cu.size * self.node_counts_cu.itemsize) + \
-            (self.next_node_counts_cu.size * self.next_node_counts_cu.itemsize) + \
-            (self.next_node_counts_by_feature_cu.size * self.next_node_counts_by_feature_cu.itemsize) + \
-            (self.nodes_by_pixel_cu.size * self.nodes_by_pixel_cu.itemsize) + \
-            (self.active_nodes_cu.size * self.active_nodes_cu.itemsize) + \
-            (self.next_active_nodes_cu.size * self.next_active_nodes_cu.itemsize)
+        image_block_dims = (self.NUM_IMAGES_PER_IMAGE_BLOCK, dataset.config.img_dims[1], dataset.config.img_dims[0])
 
-        print('GPU arrays allocated for training. Memory used: ' '{:,}'.format(training_allocation))
+        self.current_image_block_depth_cpu = cu.pagelocked_zeros(image_block_dims, dtype=np.uint16)
+        self.current_image_block_depth = cu_array.GPUArray(image_block_dims, dtype=np.uint16)
+
+        self.current_image_block_labels_cpu = cu.pagelocked_zeros(image_block_dims, dtype=np.uint16)
+        self.current_image_block_labels = cu_array.GPUArray(image_block_dims, dtype=np.uint16)
+
+        # compressed format..
+        self.nodes_by_pixel_png = []
+        self.current_image_block_nodes_by_pixel_cpu = cu.pagelocked_zeros(image_block_dims, dtype=np.int32)
+        self.current_image_block_nodes_by_pixel = cu_array.GPUArray(image_block_dims, dtype=np.int32)
+
+        self.current_proposals_block = cu_array.GPUArray((self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK, 5), dtype=np.float32)
+        self.current_next_node_counts_by_feature_cu_block = cu_array.GPUArray((self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK, self.MAX_LEAF_NODES, dataset.config.num_classes()), dtype=np.uint64)
 
     def train(self, dataset, tree):
+
+        NUM_IMAGE_BLOCKS = dataset.num_images // self.NUM_IMAGES_PER_IMAGE_BLOCK
+        NUM_PROPOSAL_BLOCKS = self.NUM_RANDOM_FEATURES // self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK
 
         tree.tree_out_cu.fill(np.float(0.))
 
         # start conditions for iteration
         # original distribution of classes as node counts
         self.node_counts[:] = 0
-        self.node_counts[0,1:] = np.unique(dataset.labels, return_counts=True)[1][1:]
-        self.node_counts_cu.set(self.node_counts)
+        self.nodes_by_pixel_png = []
 
-        self.nodes_by_pixel[:] = -1
-        self.nodes_by_pixel[np.where(dataset.labels > 0)] = 0
-        self.nodes_by_pixel_cu.set(self.nodes_by_pixel)
+        for ii in range(NUM_IMAGE_BLOCKS):
+            i_start = ii * self.NUM_IMAGES_PER_IMAGE_BLOCK
+            i_end = (ii + 1) * self.NUM_IMAGES_PER_IMAGE_BLOCK
+            dataset.get_labels(i_start, self.current_image_block_labels_cpu)
+            un = np.unique(self.current_image_block_labels_cpu, return_counts=True)
+            for label_id, count in zip(un[0], un[1]):
+                if label_id > 0:
+                    self.node_counts[0][label_id] += count
+
+            block_nodes_by_pixel = np.ones(self.current_image_block_labels_cpu.shape, dtype=np.int32) * -1
+            block_nodes_by_pixel[np.where(self.current_image_block_labels_cpu > 0)] = 0
+            png_bytes = get_all_png_bytes(block_nodes_by_pixel)
+
+            self.nodes_by_pixel_png += png_bytes
+
+        self.node_counts_cu.set(self.node_counts)
 
         # 1 node to start, at idx 0
         self.active_nodes_cu.fill(np.int32(0))
@@ -291,89 +364,132 @@ class DecisionTreeTrainer():
 
         for current_level in range(self.MAX_TREE_DEPTH):
 
+            print('training level', current_level)
+
             num_active_nodes = self.get_next_num_active_nodes()
             if num_active_nodes == 0:
                 break
 
-            # print('training level', current_level)
+            self.best_gain_seen_per_node.fill(np.float32(-1.))
 
-            # make list of random features
-            self.proposal_features_cu.set(make_random_features(self.NUM_RANDOM_FEATURES))
+            for ff in range(NUM_PROPOSAL_BLOCKS):
 
-            # reset next per-feature node counts
-            self.next_node_counts_by_feature_cu.fill(np.uint64(0))
+                print('  proposal block: ', ff)
+                
+                f_start = ff * self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK
+                f_end = (ff + 1) * self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK
 
-            BLOCK_DIM_X = int(MAX_THREADS_PER_BLOCK // self.NUM_RANDOM_FEATURES)
-            grid_dim = (int(dataset.num_pixels() // BLOCK_DIM_X) + 1, 1, 1)
-            block_dim = (BLOCK_DIM_X, int(self.NUM_RANDOM_FEATURES), 1)
+                self.current_proposals_block.set(make_random_features(self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK))
+                self.current_next_node_counts_by_feature_cu_block.fill(np.uint64(0))
 
-            # for each feature block:
-            #   for each image block:
-            #      generate next_node_counts_by_feature
+                for ii in range(NUM_IMAGE_BLOCKS):
 
-            self.cu_eval_random_features(
-                np.int32(dataset.num_images),
-                np.int32(dataset.config.img_dims[0]),
-                np.int32(dataset.config.img_dims[1]),
-                np.int32(self.NUM_RANDOM_FEATURES),
-                np.int32(dataset.config.num_classes()),
-                np.int32(self.MAX_TREE_DEPTH),
-                dataset.labels_cu,
-                dataset.depth_cu,
-                self.proposal_features_cu,
-                self.nodes_by_pixel_cu,
-                self.next_node_counts_by_feature_cu,
-                grid=grid_dim, block=block_dim)
+                    print('    image block', ii)
 
-            pick_best_grid_dim = (int(num_active_nodes // MAX_THREADS_PER_BLOCK) + 1, 1, 1)
-            pick_best_block_dim = (MAX_THREADS_PER_BLOCK, 1, 1)
+                    i_start = ii * self.NUM_IMAGES_PER_IMAGE_BLOCK
+                    i_end = (ii + 1) * self.NUM_IMAGES_PER_IMAGE_BLOCK
 
-            self.next_node_counts_cu.fill(np.uint64(0))
-            self.next_active_nodes_cu.fill(np.int32(0))
+                    dataset.get_labels(i_start, self.current_image_block_labels_cpu)
+                    dataset.get_depth(i_start, self.current_image_block_depth_cpu)
+
+                    self.current_image_block_labels.set(self.current_image_block_labels_cpu)
+                    self.current_image_block_depth.set(self.current_image_block_depth_cpu)
+
+                    decode_all_pngs(self.nodes_by_pixel_png[i_start : i_end], self.current_image_block_nodes_by_pixel_cpu)
+                    self.current_image_block_nodes_by_pixel.set(self.current_image_block_nodes_by_pixel_cpu)
+
+                    bdx = MAX_THREADS_PER_BLOCK // self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK
+                    img_block_shape = self.current_image_block_depth.shape
+                    num_pixels_in_block = (img_block_shape[0] * img_block_shape[1] * img_block_shape[2])
+
+                    gd = ((num_pixels_in_block // bdx) + 1, 1, 1)
+                    bd = (bdx, self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK, 1)
+
+                    self.cu_eval_random_features(
+                        np.int32(self.NUM_IMAGES_PER_IMAGE_BLOCK),
+                        np.int32(dataset.config.img_dims[0]),
+                        np.int32(dataset.config.img_dims[1]),
+                        np.int32(self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK),
+                        np.int32(dataset.config.num_classes()),
+                        np.int32(self.MAX_TREE_DEPTH),
+                        self.current_image_block_labels,
+                        self.current_image_block_depth,
+                        self.current_proposals_block,
+                        self.current_image_block_nodes_by_pixel,
+                        self.current_next_node_counts_by_feature_cu_block,
+                        grid=gd, block=bd)
+
+                print('    pick best')
+
+                pick_best_grid_dim = (int(num_active_nodes // MAX_THREADS_PER_BLOCK) + 1, 1, 1)
+                pick_best_block_dim = (MAX_THREADS_PER_BLOCK, 1, 1)
+
+                self.cu_pick_best_features(
+                    np.int32(num_active_nodes),
+                    np.int32(self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK),
+                    np.int32(self.MAX_TREE_DEPTH),
+                    np.int32(dataset.config.num_classes()),
+                    np.int32(current_level),
+                    self.active_nodes_cu,
+                    self.node_counts_cu,
+                    self.current_next_node_counts_by_feature_cu_block,
+                    self.current_proposals_block,
+                    tree.tree_out_cu,
+                    self.next_node_counts_cu,
+                    self.best_gain_seen_per_node,
+                    grid=pick_best_grid_dim, block=pick_best_block_dim)
+
             self.next_num_active_nodes_cu.fill(np.int32(0))
+            self.next_active_nodes_cu.fill(np.int32(0))
 
-            # per feature block:
-            #   determine best gini gain feature for each node
-            #   write the tree out accordingly
+            print('  gen active nodes next level')
 
-            self.cu_pick_best_features(
-                np.int32(num_active_nodes),
-                np.int32(self.NUM_RANDOM_FEATURES),
+            self.get_active_nodes_next_level(
+                np.int32(current_level),
                 np.int32(self.MAX_TREE_DEPTH),
                 np.int32(dataset.config.num_classes()),
-                np.int32(current_level),
-                self.active_nodes_cu,
-                self.node_counts_cu,
-                self.next_node_counts_by_feature_cu,
-                self.proposal_features_cu,
                 tree.tree_out_cu,
-                self.next_node_counts_cu,
-                # 2nd kernel after all feature guesses blocks have been analyzed: given final tree for this level, make list of nodes that are active for the next level
+                self.active_nodes_cu,
+                np.int32(num_active_nodes),
                 self.next_active_nodes_cu,
                 self.next_num_active_nodes_cu,
-                grid=pick_best_grid_dim, block=pick_best_block_dim)
+                grid=(int(num_active_nodes), 1, 1), block=(1, 1, 1))
 
             if current_level == self.MAX_TREE_DEPTH - 1:
                 break
 
             self.node_counts_cu.set(self.next_node_counts_cu)
 
-            copy_grid_dim = (int(dataset.num_pixels() // MAX_THREADS_PER_BLOCK) + 1, 1, 1)
-            copy_block_dim = (MAX_THREADS_PER_BLOCK, 1, 1)
+            for ii in range(NUM_IMAGE_BLOCKS):
 
-            # per image block
+                print('  eval pixels', ii)
 
-            self.cu_copy_pixel_groups(
-                np.int32(dataset.num_images),
-                np.int32(dataset.config.img_dims[0]),
-                np.int32(dataset.config.img_dims[1]),
-                np.int32(current_level),
-                np.int32(self.MAX_TREE_DEPTH),
-                np.int32(dataset.config.num_classes()),
-                dataset.depth_cu,
-                self.nodes_by_pixel_cu,
-                tree.tree_out_cu,
-                grid = copy_grid_dim, block=copy_block_dim)
+                i_start = ii * self.NUM_IMAGES_PER_IMAGE_BLOCK
+                i_end = (ii+1) * self.NUM_IMAGES_PER_IMAGE_BLOCK
+
+                dataset.get_depth(i_start, self.current_image_block_depth_cpu)
+                self.current_image_block_depth.set(self.current_image_block_depth_cpu)
+
+                decode_all_pngs(self.nodes_by_pixel_png[i_start : i_end], self.current_image_block_nodes_by_pixel_cpu)
+                self.current_image_block_nodes_by_pixel.set(self.current_image_block_nodes_by_pixel_cpu)
+                
+                copy_grid_dim = (int((self.NUM_IMAGES_PER_IMAGE_BLOCK * dataset.config.img_dims[0] * dataset.config.img_dims[1]) // MAX_THREADS_PER_BLOCK) + 1, 1, 1)
+                copy_block_dim = (MAX_THREADS_PER_BLOCK, 1, 1)
+
+                self.cu_copy_pixel_groups(
+                    np.int32(self.NUM_IMAGES_PER_IMAGE_BLOCK),
+                    np.int32(dataset.config.img_dims[0]),
+                    np.int32(dataset.config.img_dims[1]),
+                    np.int32(current_level),
+                    np.int32(self.MAX_TREE_DEPTH),
+                    np.int32(dataset.config.num_classes()),
+                    self.current_image_block_depth,
+                    self.current_image_block_nodes_by_pixel,
+                    tree.tree_out_cu,
+                    grid = copy_grid_dim, block=copy_block_dim)
+
+                self.current_image_block_nodes_by_pixel.get(self.current_image_block_nodes_by_pixel_cpu)
+                self.nodes_by_pixel_png[i_start : i_end] = get_all_png_bytes(self.current_image_block_nodes_by_pixel_cpu)
 
             self.active_nodes_cu.set(self.next_active_nodes_cu)
 

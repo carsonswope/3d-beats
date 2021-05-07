@@ -100,9 +100,7 @@ void pick_best_features(
         float* _random_features,
         float* _tree_out,
         uint64* _child_node_counts, // not by feature! - after we picked the best feature!
-        int* next_active_nodes,
-        int* num_next_active_nodes
-    ) {
+        float* best_gain_seen_per_node) {
 
     // i: active node idx
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -124,6 +122,8 @@ void pick_best_features(
 
     uint64* parent_node_counts_ptr = parent_node_counts.get_ptr({parent_node, 0});
     const uint64 parent_nodes_sum = node_counts_sum(parent_node_counts_ptr, NUM_CLASSES);
+
+    const float previous_best_g = best_gain_seen_per_node[i];
 
     float best_g = -1.;
     int best_g_feature_id = 0;
@@ -154,6 +154,11 @@ void pick_best_features(
     }
 
     assert(best_g > -1.f);
+
+    if (best_g <= previous_best_g) return;
+
+    // We found a better node!
+    best_gain_seen_per_node[i] = best_g;
 
     const uint64 best_left_counts_sum = node_counts_sum(best_left_counts_ptr, NUM_CLASSES);
     const uint64 best_right_counts_sum  = node_counts_sum(best_right_counts_ptr, NUM_CLASSES);
@@ -194,7 +199,6 @@ void pick_best_features(
         } else {
             tree_out_ptr[5] = -1;
             // still going! add to next!
-            next_active_nodes[atomicAdd(num_next_active_nodes, 1)] = left_child_node;
             memcpy(child_node_counts.get_ptr({left_child_node, 0}), best_left_counts_ptr, sizeof(uint64) * NUM_CLASSES);
         }
     }
@@ -212,12 +216,47 @@ void pick_best_features(
         } else {
             tree_out_ptr[6] = -1;
             // still going! add to next!
-            next_active_nodes[atomicAdd(num_next_active_nodes, 1)] = right_child_node;
             memcpy(child_node_counts.get_ptr({right_child_node, 0}), best_right_counts_ptr, sizeof(uint64) * NUM_CLASSES);
         }
     }
 }}
 
+extern "C" {__global__
+void get_active_nodes_next_level(
+        int CURRENT_TREE_LEVEL,
+        int MAX_TREE_DEPTH,
+        int NUM_CLASSES,
+        float* _tree_so_far,
+        int* active_nodes,
+        int num_active_nodes,
+        int* next_active_nodes,
+        int* num_next_active_nodes) {
+
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (i >= num_active_nodes) return;
+
+    int node = active_nodes[i];
+
+    const int TREE_NODE_ELS = 7 + (NUM_CLASSES * 2);
+    BinaryTree<float> tree_so_far(_tree_so_far, TREE_NODE_ELS, MAX_TREE_DEPTH);
+
+    auto* tree_node = tree_so_far.get_ptr(CURRENT_TREE_LEVEL, node);
+
+    auto tree_left = tree_node[5];
+    auto tree_right = tree_node[6];
+
+    if (tree_left == -1.) {
+        auto n = atomicAdd(num_next_active_nodes, 1);
+        next_active_nodes[n] = node * 2;
+    }
+
+    if (tree_right == -1.) {
+        auto n = atomicAdd(num_next_active_nodes, 1);
+        next_active_nodes[n] = node * 2 + 1;
+    }
+
+}}
 
 extern "C" {__global__
 void copy_pixel_groups(
