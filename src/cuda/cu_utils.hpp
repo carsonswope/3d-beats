@@ -54,24 +54,32 @@ public:
 
     __device__ T get(const int3 i) {
         const int idx = get_idx(i);
-        if (idx < 0 || idx >= max_idx) { return default_value; }
+        if (idx == -1) return default_value;
         return data[idx];
     }
 
     __device__ T* get_ptr(const int3 i) {
         const int idx = get_idx(i);
-        if (idx < 0 || idx >= max_idx) { return nullptr; }
+        if (idx == -1) { return nullptr; }
         return data + idx;
     }
 
     __device__ void set(const int3 i, T val) {
         const int idx = get_idx(i);
-        if (idx < 0 || idx >= max_idx) { assert(false); }
+        if (idx == -1) { 
+            printf("Set out of bounds!\n");
+            assert(false);
+        }
         data[idx] = val;
     }
 
 private:
     __device__ int get_idx(const int3 i) {
+        const bool out_of_bounds =
+            i.x < 0 || i.x >= dims.x ||
+            i.y < 0 || i.y >= dims.y ||
+            i.z < 0 || i.z >= dims.z;
+        if (out_of_bounds) return -1;
         return (i.x * dims.y * dims.z) + (i.y * dims.z) + (i.z);
     }
 };
@@ -112,6 +120,10 @@ public:
 
 private:
     __device__ int get_idx(const int2 i) {
+        const bool out_of_bounds = 
+            i.x < 0 || i.x >= dims.x ||
+            i.y < 0 || i.y >= dims.y;
+        if (out_of_bounds) return -1;
         return (i.x * dims.y) + (i.y);
     }
 };
