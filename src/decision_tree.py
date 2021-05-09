@@ -8,6 +8,8 @@ from io import BytesIO
 import pycuda.gpuarray as cu_array
 import pycuda.driver as cu
 
+import nvcomp
+
 MAX_THREADS_PER_BLOCK = 1024 # cuda constant..
 
 MAX_UINT16 = np.uint16(65535) # max for 16 bit unsigned
@@ -17,7 +19,7 @@ MAX_UINT16 = np.uint16(65535) # max for 16 bit unsigned
 # mapping from label colors to int IDs
 class DecisionTreeDatasetConfig():
 
-    def __init__(self, dataset_dir, load_train=True, load_test=True):
+    def __init__(self, dataset_dir, load_train=True, load_test=True, images_per_training_block=0):
 
         self.dataset_dir = dataset_dir
         cfg = json.loads(open(dataset_dir + 'config.json').read())
@@ -33,7 +35,7 @@ class DecisionTreeDatasetConfig():
         arr_size = lambda x: x.size * x.itemsize
 
         if load_train:
-            self.train = DecisionTreeDataset(dataset_dir + 'train', self.num_train, self, load_cu=False)
+            self.train = DecisionTreeDataset(dataset_dir + 'train', self.num_train, self, load_compressed_cu=images_per_training_block > 0, load_compressed_cu_images_per_block=images_per_training_block, load_cu=False)
             # print(self.num_train, 'training images loaded. CPU Pagelocked memory used: ', '{:,}'.format(arr_size(self.train.depth) + arr_size(self.train.labels)))
             # print(self.num_train, 'training images loaded. GPU memory used: ', '{:,}'.format(arr_size(self.train.depth_cu) + arr_size(self.train.labels_cu)))
         else:
@@ -75,15 +77,180 @@ class DecisionTreeDatasetConfig():
         return labels_colors
 
 class DecisionTreeDataset():
-    def __init__(self, path_root, num_images, config, load_cu=True):
+    def __init__(self, path_root, num_images, config, load_cu=True, load_compressed_cu=False, load_compressed_cu_images_per_block=0):
         self.num_images = num_images
         self.config = config
         # raw bytes in PNG format (compressed!)
         self.all_depth_pngs, self.all_labels_pngs = self.load_data(path_root, num_images)
 
-        # if load_cu:
-            # self.depth_cu = cu_array.to_gpu(self.depth)
-            # self.labels_cu = cu_array.to_gpu(self.labels)
+        if load_compressed_cu:
+            assert self.num_images % load_compressed_cu_images_per_block == 0
+            NUM_IMAGE_BLOCKS = self.num_images // load_compressed_cu_images_per_block
+            # IMAGES_PER_IMAGE_BLOCK = 
+
+            compressor = nvcomp.CascadedCompressor('u2', 2, 1, True)
+
+            depth_block_np = np.zeros((load_compressed_cu_images_per_block, self.config.img_dims[1], self.config.img_dims[0]), np.uint16)
+            labels_block_np = np.zeros((load_compressed_cu_images_per_block, self.config.img_dims[1], self.config.img_dims[0]), np.uint16)
+            uncompressed_block_cu = cu_array.to_gpu(depth_block_np)
+            block_size = depth_block_np.size * depth_block_np.itemsize
+            # for 
+            compressor_temp_size, compressor_output_max_size = compressor.configure(block_size)
+
+            compressor_temp_cu = cu_array.GPUArray((compressor_temp_size,), dtype=np.uint8)
+            compressor_output_cu = cu_array.GPUArray((compressor_output_max_size,), dtype=np.uint8)
+            compressor_output_size = cu.pagelocked_zeros((1,), np.int64)
+
+            # blocks will all 
+            # length_block_indices = [] # (start_idx, length)
+            # depth_block_indices = []
+
+            compressed_depth_blocks = []
+            compressed_labels_blocks = []
+
+            for i in range(NUM_IMAGE_BLOCKS):
+                for j in range(load_compressed_cu_images_per_block):
+                    img_idx = (i * load_compressed_cu_images_per_block) + j
+                    depth_png = self.all_depth_pngs[img_idx]
+                    labels_png = self.all_labels_pngs[img_idx]
+                    depth_np = imageio.imread(BytesIO(depth_png)).view(np.uint16)
+                    labels_np = imageio.imread(BytesIO(labels_png)).view(np.uint16)
+                    depth_block_np[j] = depth_np
+                    labels_block_np[j] = labels_np
+
+                # first compress depth
+                uncompressed_block_cu.set(depth_block_np)
+                compressor.compress(
+                    uncompressed_block_cu.ptr,
+                    block_size,
+                    compressor_temp_cu.ptr,
+                    compressor_temp_size,
+                    compressor_output_cu.ptr,
+                    compressor_output_size.__array_interface__['data'][0])
+
+                cu.Context.synchronize()
+                compressed_depth_size = compressor_output_size[0]
+                compressed_depth_blocks.append(compressor_output_cu[0:compressed_depth_size].get())
+
+                # then compress labels
+                uncompressed_block_cu.set(labels_block_np)
+                compressor.compress(
+                    uncompressed_block_cu.ptr,
+                    block_size,
+                    compressor_temp_cu.ptr,
+                    compressor_temp_size,
+                    compressor_output_cu.ptr,
+                    compressor_output_size.__array_interface__['data'][0])
+                
+                cu.Context.synchronize()
+                compressed_labels_size = compressor_output_size[0]
+                compressed_labels_blocks.append(compressor_output_cu[0:compressed_labels_size].get())
+            
+            all_compressed_depth_blocks_size = sum([b.shape[0] for b in compressed_depth_blocks])
+            all_compressed_labels_blocks_size = sum([b.shape[0] for b in compressed_labels_blocks])
+
+            self.all_compressed_depth_blocks_cu = cu_array.GPUArray((all_compressed_depth_blocks_size,), dtype=np.uint8)
+            self.all_compressed_labels_blocks_cu = cu_array.GPUArray((all_compressed_labels_blocks_size,), dtype=np.uint8)
+
+            self.depth_blocks_idxes = [] # (start_idx, length)
+            self.labels_blocks_idxes = []
+
+            depth_idx = 0
+            labels_idx = 0
+
+            all_compressed_depth_blocks_cpu = np.zeros((all_compressed_depth_blocks_size,), np.uint8)
+            all_compressed_labels_blocks_cpu = np.zeros((all_compressed_labels_blocks_size,), np.uint8)
+
+            for i in range(NUM_IMAGE_BLOCKS):
+                compressed_depth_block_size = compressed_depth_blocks[i].shape[0]
+                compressed_labels_block_size = compressed_labels_blocks[i].shape[0]
+                self.depth_blocks_idxes.append((depth_idx, compressed_depth_block_size))
+                self.labels_blocks_idxes.append((labels_idx, compressed_labels_block_size))
+                all_compressed_depth_blocks_cpu[depth_idx:depth_idx+compressed_depth_block_size] = compressed_depth_blocks[i]
+                all_compressed_labels_blocks_cpu[labels_idx:labels_idx+compressed_labels_block_size] = compressed_labels_blocks[i]
+                depth_idx += compressed_depth_block_size
+                labels_idx += compressed_labels_block_size
+
+            self.all_compressed_depth_blocks_cu.set(all_compressed_depth_blocks_cpu)
+            self.all_compressed_labels_blocks_cu.set(all_compressed_labels_blocks_cpu)
+
+            # compression complete. release memory used for compression
+            del uncompressed_block_cu
+            del compressor_output_cu
+            del compressor_temp_cu
+
+            self.decompressor = nvcomp.CascadedDecompressor()
+            self.decompressor_temp_size = cu.pagelocked_zeros((1,), np.int64)
+            self.decompressor_output_size = cu.pagelocked_zeros((1,), np.int64)
+
+            max_decompressor_temp_size = 0
+
+            for i in range(NUM_IMAGE_BLOCKS):
+
+                # first depth
+                depth_i, depth_block_compressed_size = self.depth_blocks_idxes[i]
+                self.decompressor.configure(
+                    self.all_compressed_depth_blocks_cu[depth_i].ptr,
+                    depth_block_compressed_size,
+                    self.decompressor_temp_size.__array_interface__['data'][0],
+                    self.decompressor_output_size.__array_interface__['data'][0])
+                cu.Context.synchronize()
+                print('temp size: ', self.decompressor_temp_size[0])
+                assert self.decompressor_output_size[0] == block_size
+                max_decompressor_temp_size = max(max_decompressor_temp_size, self.decompressor_temp_size[0])
+
+                # then labels
+                labels_i, labels_block_compressed_size = self.labels_blocks_idxes[i]
+                self.decompressor.configure(
+                    self.all_compressed_labels_blocks_cu[labels_i].ptr,
+                    labels_block_compressed_size,
+                    self.decompressor_temp_size.__array_interface__['data'][0],
+                    self.decompressor_output_size.__array_interface__['data'][0])
+                cu.Context.synchronize()
+                print('temp size: ', self.decompressor_temp_size[0])
+                assert self.decompressor_output_size[0] == block_size
+                max_decompressor_temp_size = max(max_decompressor_temp_size, self.decompressor_temp_size[0])
+
+            self.decompressor_temp_cu = cu_array.GPUArray((max_decompressor_temp_size,), dtype=np.uint8)
+
+
+    def get_depth_block_cu(self, block_num, arr_out):
+
+        depth_i, depth_block_compressed_size = self.depth_blocks_idxes[block_num]
+
+        # allocations already made, still have to configure though..
+        self.decompressor.configure(
+            self.all_compressed_depth_blocks_cu[depth_i].ptr,
+            depth_block_compressed_size,
+            self.decompressor_temp_size.__array_interface__['data'][0],
+            self.decompressor_output_size.__array_interface__['data'][0])
+
+        self.decompressor.decompress(
+            self.all_compressed_depth_blocks_cu[depth_i].ptr,
+            depth_block_compressed_size,
+            self.decompressor_temp_cu.ptr,
+            self.decompressor_temp_cu.size, # itemsize==1, uint8
+            arr_out.ptr,
+            arr_out.size * arr_out.itemsize)
+
+    def get_labels_block_cu(self, block_num, arr_out):
+
+        labels_i, labels_block_compressed_size = self.labels_blocks_idxes[block_num]
+
+        # allocations already made, still have to configure though..
+        self.decompressor.configure(
+            self.all_compressed_labels_blocks_cu[labels_i].ptr,
+            labels_block_compressed_size,
+            self.decompressor_temp_size.__array_interface__['data'][0],
+            self.decompressor_output_size.__array_interface__['data'][0])
+
+        self.decompressor.decompress(
+            self.all_compressed_labels_blocks_cu[labels_i].ptr,
+            labels_block_compressed_size,
+            self.decompressor_temp_cu.ptr,
+            self.decompressor_temp_cu.size, # itemsize==1, uint8
+            arr_out.ptr,
+            arr_out.size * arr_out.itemsize)
 
     # fill up a (np.array(num_images, dimy, dimx)) with labels via decoding the PNG!
     def get_labels(self, start_idx, a):
@@ -279,7 +446,7 @@ def decode_all_pngs(pngs, out_a):
 
 
 class DecisionTreeTrainer():
-    def __init__(self):
+    def __init__(self, NUM_IMAGES_PER_IMAGE_BLOCK):
         # first load kernels..
         cu_mod = py_nvcc_utils.get_module('src/cuda/tree_train.cu')
         self.cu_eval_random_features = cu_mod.get_function('evaluate_random_features')
@@ -287,10 +454,11 @@ class DecisionTreeTrainer():
         self.cu_copy_pixel_groups = cu_mod.get_function('copy_pixel_groups')
         self.get_active_nodes_next_level = cu_mod.get_function('get_active_nodes_next_level')
 
-        self.NUM_IMAGES_PER_IMAGE_BLOCK = 512
+        self.NUM_IMAGES_PER_IMAGE_BLOCK = NUM_IMAGES_PER_IMAGE_BLOCK
         self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK = 128
 
-    def allocate(self, dataset, NUM_RANDOM_FEATURES, MAX_TREE_DEPTH):
+    def allocate(self, dataset, NUM_RANDOM_FEATURES, MAX_TREE_DEPTH,):
+
 
         # then,
         self.NUM_RANDOM_FEATURES = NUM_RANDOM_FEATURES
@@ -341,10 +509,16 @@ class DecisionTreeTrainer():
         self.node_counts[:] = 0
         self.nodes_by_pixel_png = []
 
+        # current_image_block_labels_cu__ = cu_arra
+
         for ii in range(NUM_IMAGE_BLOCKS):
             i_start = ii * self.NUM_IMAGES_PER_IMAGE_BLOCK
             i_end = (ii + 1) * self.NUM_IMAGES_PER_IMAGE_BLOCK
-            dataset.get_labels(i_start, self.current_image_block_labels_cpu)
+            # dataset.get_labels(i_start, self.current_image_block_labels_cpu)
+
+            dataset.get_labels_block_cu(ii, self.current_image_block_labels)
+            self.current_image_block_labels_cpu = self.current_image_block_labels.get()
+
             un = np.unique(self.current_image_block_labels_cpu, return_counts=True)
             for label_id, count in zip(un[0], un[1]):
                 if label_id > 0:
@@ -389,11 +563,8 @@ class DecisionTreeTrainer():
                     i_start = ii * self.NUM_IMAGES_PER_IMAGE_BLOCK
                     i_end = (ii + 1) * self.NUM_IMAGES_PER_IMAGE_BLOCK
 
-                    dataset.get_labels(i_start, self.current_image_block_labels_cpu)
-                    dataset.get_depth(i_start, self.current_image_block_depth_cpu)
-
-                    self.current_image_block_labels.set(self.current_image_block_labels_cpu)
-                    self.current_image_block_depth.set(self.current_image_block_depth_cpu)
+                    dataset.get_labels_block_cu(ii, self.current_image_block_labels)
+                    dataset.get_depth_block_cu(ii, self.current_image_block_depth)
 
                     decode_all_pngs(self.nodes_by_pixel_png[i_start : i_end], self.current_image_block_nodes_by_pixel_cpu)
                     self.current_image_block_nodes_by_pixel.set(self.current_image_block_nodes_by_pixel_cpu)
@@ -467,8 +638,10 @@ class DecisionTreeTrainer():
                 i_start = ii * self.NUM_IMAGES_PER_IMAGE_BLOCK
                 i_end = (ii+1) * self.NUM_IMAGES_PER_IMAGE_BLOCK
 
-                dataset.get_depth(i_start, self.current_image_block_depth_cpu)
-                self.current_image_block_depth.set(self.current_image_block_depth_cpu)
+                # dataset.get_depth(i_start, self.current_image_block_depth_cpu)
+                # self.current_image_block_depth.set(self.current_image_block_depth_cpu)
+
+                dataset.get_depth_block_cu(ii, self.current_image_block_depth)
 
                 decode_all_pngs(self.nodes_by_pixel_png[i_start : i_end], self.current_image_block_nodes_by_pixel_cpu)
                 self.current_image_block_nodes_by_pixel.set(self.current_image_block_nodes_by_pixel_cpu)

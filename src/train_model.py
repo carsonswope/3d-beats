@@ -12,12 +12,14 @@ import os
 np.set_printoptions(suppress=True)
 MAX_UINT16 = np.uint16(65535) # max for 16 bit unsigned
 
+IMAGES_PER_TRAINING_BLOCK = 256
+
 print('compiling CUDA kernels..')
-decision_tree_trainer = DecisionTreeTrainer()
+decision_tree_trainer = DecisionTreeTrainer(IMAGES_PER_TRAINING_BLOCK)
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading training data')
-dataset = DecisionTreeDatasetConfig('datagen/sets/set3/')
+dataset = DecisionTreeDatasetConfig('datagen/sets/set3/', images_per_training_block=IMAGES_PER_TRAINING_BLOCK)
 
 print('allocating GPU memory')
 NUM_RANDOM_FEATURES = 256
