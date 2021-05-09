@@ -101,10 +101,6 @@ class DecisionTreeDataset():
             compressor_output_cu = cu_array.GPUArray((compressor_output_max_size,), dtype=np.uint8)
             compressor_output_size = cu.pagelocked_zeros((1,), np.int64)
 
-            # blocks will all 
-            # length_block_indices = [] # (start_idx, length)
-            # depth_block_indices = []
-
             compressed_depth_blocks = []
             compressed_labels_blocks = []
 
@@ -426,25 +422,6 @@ def make_random_features(n):
     proposal_features = [(make_random_feature(), make_random_threshold()) for i in range(n)]
     return np.array([(p[0][0][0], p[0][0][1], p[0][1][0], p[0][1][1], p[1]) for p in proposal_features ], dtype=np.float32)
 
-# convert np array to png bytes!
-def get_png_bytes(a):
-    assert a.dtype == np.int32
-    _o = BytesIO()
-    _i = Image.fromarray(a.view(np.uint8))
-    _i.save(_o, format='PNG')
-    return _o.getvalue()
-
-# convert multiple images to an array of bytes!
-def get_all_png_bytes(a):
-    assert len(a.shape) == 3
-    return [get_png_bytes(_a) for _a in a]
-
-def decode_all_pngs(pngs, out_a):
-    for i in range(len(pngs)):
-        img_pixels = imageio.imread(BytesIO(pngs[i]))
-        out_a[i] = img_pixels.view(np.int32)
-
-
 class DecisionTreeTrainer():
     def __init__(self, NUM_IMAGES_PER_IMAGE_BLOCK):
         # first load kernels..
@@ -455,7 +432,17 @@ class DecisionTreeTrainer():
         self.get_active_nodes_next_level = cu_mod.get_function('get_active_nodes_next_level')
 
         self.NUM_IMAGES_PER_IMAGE_BLOCK = NUM_IMAGES_PER_IMAGE_BLOCK
-        self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK = 128
+        self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK = 256
+
+        self.nodes_by_pixel_compressor = nvcomp.CascadedCompressor('i4', 2, 1, True)
+        self.nodes_by_pixel_decompressor = nvcomp.CascadedDecompressor()
+
+        # just guess.. the real 'max' will be much larger
+        self.nodes_by_pixel_compressor_estimated_max_output_size = 20000000 # 20 mb?
+
+        self.nodes_by_pixel_decompressor_temp_max_size = 50000000 # 50 mb?
+        self.nodes_by_pixel_decompressor_temp = cu_array.GPUArray((self.nodes_by_pixel_decompressor_temp_max_size,), dtype=np.uint8)
+
 
     def allocate(self, dataset, NUM_RANDOM_FEATURES, MAX_TREE_DEPTH,):
 
@@ -490,9 +477,20 @@ class DecisionTreeTrainer():
         self.current_image_block_labels = cu_array.GPUArray(image_block_dims, dtype=np.uint16)
 
         # compressed format..
-        self.nodes_by_pixel_png = []
         self.current_image_block_nodes_by_pixel_cpu = cu.pagelocked_zeros(image_block_dims, dtype=np.int32)
         self.current_image_block_nodes_by_pixel = cu_array.GPUArray(image_block_dims, dtype=np.int32)
+
+        # just guess on upper limit for max size. it will be much smaller than this one
+        self.nodes_by_pixel_compressor_temp_size, self.nodes_by_pixel_compressor_output_max_size = self.nodes_by_pixel_compressor.configure(self.current_image_block_nodes_by_pixel.size * self.current_image_block_nodes_by_pixel.itemsize)
+        self.nodes_by_pixel_compressor_temp = cu_array.GPUArray((self.nodes_by_pixel_compressor_temp_size,), dtype=np.uint8)
+        self.nodes_by_pixel_compressor_output = cu_array.GPUArray((self.nodes_by_pixel_compressor_output_max_size,), dtype=np.uint8)
+        self.nodes_by_pixel_compressor_output_size = cu.pagelocked_zeros((1,), np.uint64)
+
+        # (size_of_block, gpu memory)
+        self.nodes_by_pixel_compressed_blocks = [[0, cu_array.GPUArray((self.nodes_by_pixel_compressor_estimated_max_output_size,), dtype=np.uint8)] for i in range(dataset.num_images // self.NUM_IMAGES_PER_IMAGE_BLOCK)]
+
+        self.nodes_by_pixel_decompressor_temp_size = cu.pagelocked_zeros((1,), np.uint64)
+        self.nodes_by_pixel_decompressor_output_size = cu.pagelocked_zeros((1,), np.uint64)
 
         self.current_proposals_block = cu_array.GPUArray((self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK, 5), dtype=np.float32)
         self.current_next_node_counts_by_feature_cu_block = cu_array.GPUArray((self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK, self.MAX_LEAF_NODES, dataset.config.num_classes()), dtype=np.uint64)
@@ -507,15 +505,9 @@ class DecisionTreeTrainer():
         # start conditions for iteration
         # original distribution of classes as node counts
         self.node_counts[:] = 0
-        self.nodes_by_pixel_png = []
-
-        # current_image_block_labels_cu__ = cu_arra
 
         for ii in range(NUM_IMAGE_BLOCKS):
-            i_start = ii * self.NUM_IMAGES_PER_IMAGE_BLOCK
-            i_end = (ii + 1) * self.NUM_IMAGES_PER_IMAGE_BLOCK
-            # dataset.get_labels(i_start, self.current_image_block_labels_cpu)
-
+ 
             dataset.get_labels_block_cu(ii, self.current_image_block_labels)
             self.current_image_block_labels_cpu = self.current_image_block_labels.get()
 
@@ -524,11 +516,22 @@ class DecisionTreeTrainer():
                 if label_id > 0:
                     self.node_counts[0][label_id] += count
 
-            block_nodes_by_pixel = np.ones(self.current_image_block_labels_cpu.shape, dtype=np.int32) * -1
-            block_nodes_by_pixel[np.where(self.current_image_block_labels_cpu > 0)] = 0
-            png_bytes = get_all_png_bytes(block_nodes_by_pixel)
+            self.current_image_block_nodes_by_pixel_cpu.fill(-1)
+            self.current_image_block_nodes_by_pixel_cpu[np.where(self.current_image_block_labels_cpu > 0)] = 0
 
-            self.nodes_by_pixel_png += png_bytes
+            self.current_image_block_nodes_by_pixel.set(self.current_image_block_nodes_by_pixel_cpu)
+            self.nodes_by_pixel_compressor.compress(
+                self.current_image_block_nodes_by_pixel.ptr,
+                self.current_image_block_nodes_by_pixel.size * self.current_image_block_nodes_by_pixel.itemsize,
+                self.nodes_by_pixel_compressor_temp.ptr,
+                self.nodes_by_pixel_compressor_temp_size,
+                self.nodes_by_pixel_compressor_output.ptr,
+                self.nodes_by_pixel_compressor_output_size.__array_interface__['data'][0])
+            cu.Context.synchronize()
+            assert self.nodes_by_pixel_compressor_output_size[0] <= self.nodes_by_pixel_compressor_estimated_max_output_size
+            __s = self.nodes_by_pixel_compressor_output_size[0]
+            self.nodes_by_pixel_compressed_blocks[ii][1][0:__s].set(self.nodes_by_pixel_compressor_output[0:__s])
+            self.nodes_by_pixel_compressed_blocks[ii][0] = self.nodes_by_pixel_compressor_output_size[0]
 
         self.node_counts_cu.set(self.node_counts)
 
@@ -548,26 +551,39 @@ class DecisionTreeTrainer():
 
             for ff in range(NUM_PROPOSAL_BLOCKS):
 
-                print('  proposal block: ', ff)
-                
-                f_start = ff * self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK
-                f_end = (ff + 1) * self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK
+                # print('  proposal block: ', ff)
 
                 self.current_proposals_block.set(make_random_features(self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK))
                 self.current_next_node_counts_by_feature_cu_block.fill(np.uint64(0))
 
                 for ii in range(NUM_IMAGE_BLOCKS):
 
-                    print('    image block', ii)
-
-                    i_start = ii * self.NUM_IMAGES_PER_IMAGE_BLOCK
-                    i_end = (ii + 1) * self.NUM_IMAGES_PER_IMAGE_BLOCK
+                    # print('    image block', ii)
 
                     dataset.get_labels_block_cu(ii, self.current_image_block_labels)
                     dataset.get_depth_block_cu(ii, self.current_image_block_depth)
 
-                    decode_all_pngs(self.nodes_by_pixel_png[i_start : i_end], self.current_image_block_nodes_by_pixel_cpu)
-                    self.current_image_block_nodes_by_pixel.set(self.current_image_block_nodes_by_pixel_cpu)
+                    self.nodes_by_pixel_decompressor.configure(
+                        self.nodes_by_pixel_compressed_blocks[ii][1].ptr,
+                        self.nodes_by_pixel_compressed_blocks[ii][0],
+                        self.nodes_by_pixel_decompressor_temp_size.__array_interface__['data'][0],
+                        self.nodes_by_pixel_decompressor_output_size.__array_interface__['data'][0])
+
+                    cu.Context.synchronize()
+
+                    assert self.nodes_by_pixel_decompressor_output_size[0] == self.current_image_block_nodes_by_pixel.size * self.current_image_block_nodes_by_pixel.itemsize
+                    assert self.nodes_by_pixel_decompressor_temp_size[0] <= self.nodes_by_pixel_decompressor_temp_max_size
+
+                    self.nodes_by_pixel_decompressor.decompress(
+                        self.nodes_by_pixel_compressed_blocks[ii][1].ptr,
+                        self.nodes_by_pixel_compressed_blocks[ii][0],
+                        self.nodes_by_pixel_decompressor_temp.ptr,
+                        self.nodes_by_pixel_decompressor_temp_size[0],
+                        self.current_image_block_nodes_by_pixel.ptr,
+                        self.current_image_block_nodes_by_pixel.size * self.current_image_block_nodes_by_pixel.itemsize
+                    )
+
+                    cu.Context.synchronize()
 
                     bdx = MAX_THREADS_PER_BLOCK // self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK
                     img_block_shape = self.current_image_block_depth.shape
@@ -590,7 +606,7 @@ class DecisionTreeTrainer():
                         self.current_next_node_counts_by_feature_cu_block,
                         grid=gd, block=bd)
 
-                print('    pick best')
+                # print('    pick best')
 
                 pick_best_grid_dim = (int(num_active_nodes // MAX_THREADS_PER_BLOCK) + 1, 1, 1)
                 pick_best_block_dim = (MAX_THREADS_PER_BLOCK, 1, 1)
@@ -613,7 +629,7 @@ class DecisionTreeTrainer():
             self.next_num_active_nodes_cu.fill(np.int32(0))
             self.next_active_nodes_cu.fill(np.int32(0))
 
-            print('  gen active nodes next level')
+            # print('  gen active nodes next level')
 
             self.get_active_nodes_next_level(
                 np.int32(current_level),
@@ -633,19 +649,31 @@ class DecisionTreeTrainer():
 
             for ii in range(NUM_IMAGE_BLOCKS):
 
-                print('  eval pixels', ii)
-
-                i_start = ii * self.NUM_IMAGES_PER_IMAGE_BLOCK
-                i_end = (ii+1) * self.NUM_IMAGES_PER_IMAGE_BLOCK
-
-                # dataset.get_depth(i_start, self.current_image_block_depth_cpu)
-                # self.current_image_block_depth.set(self.current_image_block_depth_cpu)
+                # print('  eval pixels', ii)
 
                 dataset.get_depth_block_cu(ii, self.current_image_block_depth)
 
-                decode_all_pngs(self.nodes_by_pixel_png[i_start : i_end], self.current_image_block_nodes_by_pixel_cpu)
-                self.current_image_block_nodes_by_pixel.set(self.current_image_block_nodes_by_pixel_cpu)
-                
+                self.nodes_by_pixel_decompressor.configure(
+                    self.nodes_by_pixel_compressed_blocks[ii][1].ptr,
+                    self.nodes_by_pixel_compressed_blocks[ii][0],
+                    self.nodes_by_pixel_decompressor_temp_size.__array_interface__['data'][0],
+                    self.nodes_by_pixel_decompressor_output_size.__array_interface__['data'][0])
+
+                cu.Context.synchronize()
+
+                assert self.nodes_by_pixel_decompressor_output_size[0] == self.current_image_block_nodes_by_pixel.size * self.current_image_block_nodes_by_pixel.itemsize
+                assert self.nodes_by_pixel_decompressor_temp_size[0] <= self.nodes_by_pixel_decompressor_temp_max_size
+
+                self.nodes_by_pixel_decompressor.decompress(
+                    self.nodes_by_pixel_compressed_blocks[ii][1].ptr,
+                    self.nodes_by_pixel_compressed_blocks[ii][0],
+                    self.nodes_by_pixel_decompressor_temp.ptr,
+                    self.nodes_by_pixel_decompressor_temp_size[0],
+                    self.current_image_block_nodes_by_pixel.ptr,
+                    self.current_image_block_nodes_by_pixel.size * self.current_image_block_nodes_by_pixel.itemsize)
+
+                cu.Context.synchronize()
+
                 copy_grid_dim = (int((self.NUM_IMAGES_PER_IMAGE_BLOCK * dataset.config.img_dims[0] * dataset.config.img_dims[1]) // MAX_THREADS_PER_BLOCK) + 1, 1, 1)
                 copy_block_dim = (MAX_THREADS_PER_BLOCK, 1, 1)
 
@@ -661,8 +689,18 @@ class DecisionTreeTrainer():
                     tree.tree_out_cu,
                     grid = copy_grid_dim, block=copy_block_dim)
 
-                self.current_image_block_nodes_by_pixel.get(self.current_image_block_nodes_by_pixel_cpu)
-                self.nodes_by_pixel_png[i_start : i_end] = get_all_png_bytes(self.current_image_block_nodes_by_pixel_cpu)
+                self.nodes_by_pixel_compressor.compress(
+                    self.current_image_block_nodes_by_pixel.ptr,
+                    self.current_image_block_nodes_by_pixel.size * self.current_image_block_nodes_by_pixel.itemsize,
+                    self.nodes_by_pixel_compressor_temp.ptr,
+                    self.nodes_by_pixel_compressor_temp_size,
+                    self.nodes_by_pixel_compressor_output.ptr,
+                    self.nodes_by_pixel_compressor_output_size.__array_interface__['data'][0])
+                cu.Context.synchronize()
+                assert self.nodes_by_pixel_compressor_output_size[0] <= self.nodes_by_pixel_compressor_estimated_max_output_size
+                __s = self.nodes_by_pixel_compressor_output_size[0]
+                self.nodes_by_pixel_compressed_blocks[ii][1][0:__s].set(self.nodes_by_pixel_compressor_output[0:__s])
+                self.nodes_by_pixel_compressed_blocks[ii][0] = self.nodes_by_pixel_compressor_output_size[0]
 
             self.active_nodes_cu.set(self.next_active_nodes_cu)
 
