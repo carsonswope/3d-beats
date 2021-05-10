@@ -19,10 +19,10 @@ decision_tree_trainer = DecisionTreeTrainer(IMAGES_PER_TRAINING_BLOCK)
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading training data')
-dataset = DecisionTreeDatasetConfig('datagen/sets/set3/', images_per_training_block=IMAGES_PER_TRAINING_BLOCK)
+dataset = DecisionTreeDatasetConfig('datagen/sets/set1/', images_per_training_block=IMAGES_PER_TRAINING_BLOCK)
 
 print('allocating GPU memory')
-NUM_RANDOM_FEATURES = 1024
+NUM_RANDOM_FEATURES = 4096
 MAX_TREE_DEPTH = 18
 tree1 = DecisionTree(MAX_TREE_DEPTH, dataset.num_classes())
 decision_tree_trainer.allocate(dataset.train, NUM_RANDOM_FEATURES, tree1.max_depth)
@@ -30,7 +30,7 @@ decision_tree_trainer.allocate(dataset.train, NUM_RANDOM_FEATURES, tree1.max_dep
 # allocate space for evaluated classes on test data
 test_output_labels_cu = cu_array.GPUArray(dataset.test.images_shape(), dtype=np.uint16)
 
-TREES_IN_FOREST = 1
+TREES_IN_FOREST = 4
 best_trees = [None for t in range(TREES_IN_FOREST)]
 tree_cpu = np.zeros((tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
 forest_cpu = np.zeros((TREES_IN_FOREST, tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
@@ -43,7 +43,7 @@ dataset.test.get_depth(0, test_depth_cpu)
 test_depth_cu = cu_array.GPUArray(dataset.test.images_shape(), dtype=np.uint16)
 test_depth_cu.set(test_depth_cpu)
 
-for i in range(1):
+for i in range(8):
     print('training tree..')
     decision_tree_trainer.train(dataset.train, tree1)
 

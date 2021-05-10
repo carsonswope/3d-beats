@@ -191,7 +191,7 @@ class DecisionTreeDataset():
                     self.decompressor_temp_size.__array_interface__['data'][0],
                     self.decompressor_output_size.__array_interface__['data'][0])
                 cu.Context.synchronize()
-                print('temp size: ', self.decompressor_temp_size[0])
+                # print('temp size: ', self.decompressor_temp_size[0])
                 assert self.decompressor_output_size[0] == block_size
                 max_decompressor_temp_size = max(max_decompressor_temp_size, self.decompressor_temp_size[0])
 
@@ -203,7 +203,7 @@ class DecisionTreeDataset():
                     self.decompressor_temp_size.__array_interface__['data'][0],
                     self.decompressor_output_size.__array_interface__['data'][0])
                 cu.Context.synchronize()
-                print('temp size: ', self.decompressor_temp_size[0])
+                # print('temp size: ', self.decompressor_temp_size[0])
                 assert self.decompressor_output_size[0] == block_size
                 max_decompressor_temp_size = max(max_decompressor_temp_size, self.decompressor_temp_size[0])
 

@@ -16,7 +16,7 @@ print('compiling CUDA kernels..')
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading training data')
-dataset = DecisionTreeDatasetConfig('datagen/sets/set3/', load_train=False, load_test=True)
+dataset = DecisionTreeDatasetConfig('datagen/sets/set1/', load_train=False, load_test=True)
 
 dataset_test_depth = np.zeros(dataset.test.images_shape(), dtype=np.uint16)
 dataset.test.get_depth(0, dataset_test_depth)
