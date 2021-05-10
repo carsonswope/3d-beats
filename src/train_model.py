@@ -9,43 +9,45 @@ from decision_tree import *
 
 import os
 
-np.set_printoptions(suppress=True)
-MAX_UINT16 = np.uint16(65535) # max for 16 bit unsigned
+from util import MAX_UINT16
 
-IMAGES_PER_TRAINING_BLOCK = 256
+np.set_printoptions(suppress=True)
+
+IMAGES_PER_TRAINING_BLOCK = 512
+PROPOSALS_PER_PROPOSAL_BLOCK = 64
 
 print('compiling CUDA kernels..')
-decision_tree_trainer = DecisionTreeTrainer(IMAGES_PER_TRAINING_BLOCK)
+decision_tree_trainer = DecisionTreeTrainer(IMAGES_PER_TRAINING_BLOCK, PROPOSALS_PER_PROPOSAL_BLOCK)
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading training data')
-dataset = DecisionTreeDatasetConfig('datagen/sets/set1/', images_per_training_block=IMAGES_PER_TRAINING_BLOCK)
+train_data = DecisionTreeDatasetConfig('datagen/sets/set1/', True, images_per_block=IMAGES_PER_TRAINING_BLOCK)
+test_data = DecisionTreeDatasetConfig('datagen/sets/set1/', False) # just one single block for test data
 
 print('allocating GPU memory')
-NUM_RANDOM_FEATURES = 4096
-MAX_TREE_DEPTH = 18
-tree1 = DecisionTree(MAX_TREE_DEPTH, dataset.num_classes())
-decision_tree_trainer.allocate(dataset.train, NUM_RANDOM_FEATURES, tree1.max_depth)
+NUM_RANDOM_FEATURES = 1024
+MAX_TREE_DEPTH = 20
+tree1 = DecisionTree(MAX_TREE_DEPTH, train_data.num_classes())
+decision_tree_trainer.allocate(train_data, NUM_RANDOM_FEATURES, tree1.max_depth)
 
 # allocate space for evaluated classes on test data
-test_output_labels_cu = cu_array.GPUArray(dataset.test.images_shape(), dtype=np.uint16)
+test_output_labels_cu = cu_array.GPUArray(test_data.images_shape(), dtype=np.uint16)
 
-TREES_IN_FOREST = 4
+TREES_IN_FOREST = 1
 best_trees = [None for t in range(TREES_IN_FOREST)]
 tree_cpu = np.zeros((tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
 forest_cpu = np.zeros((TREES_IN_FOREST, tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
 
-test_labels_cpu = cu.pagelocked_zeros(dataset.test.images_shape(), dtype=np.uint16)
-dataset.test.get_labels(0, test_labels_cpu)
+test_labels_cu = cu_array.GPUArray(test_data.images_shape(), dtype=np.uint16)
+test_data.get_labels_block_cu(0, test_labels_cu)
+test_labels_cpu = test_labels_cu.get()
 
-test_depth_cpu = cu.pagelocked_zeros(dataset.test.images_shape(), dtype=np.uint16)
-dataset.test.get_depth(0, test_depth_cpu)
-test_depth_cu = cu_array.GPUArray(dataset.test.images_shape(), dtype=np.uint16)
-test_depth_cu.set(test_depth_cpu)
+test_depth_cu = cu_array.GPUArray(test_data.images_shape(), dtype=np.uint16)
+test_data.get_depth_block_cu(0, test_depth_cu)
 
-for i in range(8):
+for i in range(1):
     print('training tree..')
-    decision_tree_trainer.train(dataset.train, tree1)
+    decision_tree_trainer.train(train_data, tree1)
 
     print('evaluating..')
     test_output_labels_cu.fill(MAX_UINT16) # doesnt attempt to reclassify when there is no pixel. makes it easier when computing pct match when 0 != 65535
@@ -70,7 +72,7 @@ for i in range(8):
         forest_cpu[copy_idx] = np.copy(tree_cpu)
 
 print('completing forest..')
-forest1 = DecisionForest(TREES_IN_FOREST, MAX_TREE_DEPTH, dataset.num_classes())
+forest1 = DecisionForest(TREES_IN_FOREST, MAX_TREE_DEPTH, test_data.num_classes())
 forest1.forest_cu.set(forest_cpu)
 
 # evaluating forest!
