@@ -9,6 +9,9 @@ void evaluate_random_features(
         int NUM_RANDOM_FEATURES,
         int NUM_CLASSES,
         int MAX_TREE_DEPTH,
+        int MAX_NEXT_NODES_TO_COUNT_PER_BLOCK,
+        int NEXT_NODE_ELIGIBLE_MIN,
+        int NEXT_NODE_ELIGIBLE_MAX,
         uint16* _img_labels,
         uint16* _img_depth,
         float* _random_features,
@@ -32,11 +35,17 @@ void evaluate_random_features(
 
     const int node = nodes_by_pixel[i];
     if (node == -1) { return; }
+    
+    const int next_node_l = node * 2;
+    const int next_node_r = (node * 2) + 1;
+
+    if (next_node_l < NEXT_NODE_ELIGIBLE_MIN || next_node_r >= NEXT_NODE_ELIGIBLE_MAX) return;
+
 
     Array3d<uint16> img_labels(_img_labels, {NUM_IMAGES,IMG_DIM_Y,IMG_DIM_X});
     Array3d<uint16> img_depth(_img_depth, {NUM_IMAGES,IMG_DIM_Y,IMG_DIM_X}, MAX_UINT16);
     Array2d<float> random_features(_random_features, {NUM_RANDOM_FEATURES, 5}); // (ux,uy,vx,vy,thresh)
-    Array3d<uint64> next_nodes_counts(_next_nodes_counts, {NUM_RANDOM_FEATURES, MAX_LEAF_NODES, NUM_CLASSES});
+    Array3d<uint64> next_nodes_counts(_next_nodes_counts, {NUM_RANDOM_FEATURES, MAX_NEXT_NODES_TO_COUNT_PER_BLOCK, NUM_CLASSES});
 
     const uint16 label = img_labels.get({img_idx, img_y, img_x});
 
@@ -47,11 +56,14 @@ void evaluate_random_features(
     const float f_thresh = f[4];
     // eval feature, split pixel into L or R node of next level
     const float f_val = compute_feature(img_depth, img_idx, {img_x, img_y}, u, v);
-    const int next_node = (node * 2) + (f_val < f_thresh ? 0 : 1);
-
+    const int next_node =
+            f_val < f_thresh ? next_node_l : next_node_r;
     assert(next_node < MAX_LEAF_NODES);
-    uint64* next_nodes_counts_ptr = next_nodes_counts.get_ptr({j, next_node, label});
+    uint64* next_nodes_counts_ptr = next_nodes_counts.get_ptr({j, next_node - NEXT_NODE_ELIGIBLE_MIN, label});
     atomicAdd(next_nodes_counts_ptr, (uint64)1);
+    // }
+
+
 }}
 
 __device__ uint64 node_counts_sum(uint64* p, const int num_classes) {
@@ -92,6 +104,9 @@ void pick_best_features(
         int NUM_ACTIVE_NODES,
         int NUM_RANDOM_FEATURES,
         int MAX_TREE_DEPTH,
+        int MAX_NEXT_NODES_TO_COUNT_PER_BLOCK,
+        int NEXT_NODE_ELIGIBLE_MIN,
+        int NEXT_NODE_ELIGIBLE_MAX,
         int NUM_CLASSES,
         int CURRENT_TREE_LEVEL,
         int* active_nodes,
@@ -110,7 +125,7 @@ void pick_best_features(
     const int TREE_NODE_ELS = 7 + (NUM_CLASSES * 2);
     const int MAX_LEAF_NODES = 1 << (MAX_TREE_DEPTH);
     Array2d<uint64> parent_node_counts(_parent_node_counts, {MAX_LEAF_NODES, NUM_CLASSES});
-    Array3d<uint64> child_node_counts_by_feature(_child_node_counts_by_feature, {NUM_RANDOM_FEATURES, MAX_LEAF_NODES, NUM_CLASSES});
+    Array3d<uint64> child_node_counts_by_feature(_child_node_counts_by_feature, {NUM_RANDOM_FEATURES, MAX_NEXT_NODES_TO_COUNT_PER_BLOCK, NUM_CLASSES});
     Array2d<float> random_features(_random_features, {NUM_RANDOM_FEATURES, 5}); // (ux,uy,vx,vy,thresh)
     BinaryTree<float> tree_out(_tree_out, TREE_NODE_ELS, MAX_TREE_DEPTH);
     Array2d<uint64> child_node_counts(_child_node_counts, {MAX_LEAF_NODES, NUM_CLASSES});
@@ -119,6 +134,8 @@ void pick_best_features(
 
     const int left_child_node = (parent_node * 2);
     const int right_child_node = (parent_node * 2) + 1;
+
+    if (left_child_node < NEXT_NODE_ELIGIBLE_MIN || right_child_node >= NEXT_NODE_ELIGIBLE_MAX) return;
 
     uint64* parent_node_counts_ptr = parent_node_counts.get_ptr({parent_node, 0});
     const uint64 parent_nodes_sum = node_counts_sum(parent_node_counts_ptr, NUM_CLASSES);
@@ -132,8 +149,8 @@ void pick_best_features(
 
     for (int j = 0; j < NUM_RANDOM_FEATURES; j++) {
 
-        uint64* left_child_counts_ptr = child_node_counts_by_feature.get_ptr({j, left_child_node, 0});
-        uint64* right_child_counts_ptr = child_node_counts_by_feature.get_ptr({j, right_child_node, 0});
+        uint64* left_child_counts_ptr = child_node_counts_by_feature.get_ptr({j, left_child_node - NEXT_NODE_ELIGIBLE_MIN, 0});
+        uint64* right_child_counts_ptr = child_node_counts_by_feature.get_ptr({j, right_child_node - NEXT_NODE_ELIGIBLE_MIN, 0});
     
         // debug!
         // verify sums match

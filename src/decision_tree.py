@@ -18,7 +18,7 @@ MAX_THREADS_PER_BLOCK = 1024 # cuda constant..
 # mapping from label colors to int IDs
 class DecisionTreeDatasetConfig():
 
-    def __init__(self, dataset_dir, load_train, images_per_block=0):
+    def __init__(self, dataset_dir, load_images=True, load_train=True, override_num_images=-1, images_per_block=0):
 
         self.dataset_dir = dataset_dir
         cfg = json.loads(open(dataset_dir + 'config.json').read())
@@ -28,7 +28,13 @@ class DecisionTreeDatasetConfig():
         for i,c in cfg['id_to_color'].items():
             self.id_to_color[int(i)] = np.array(c, dtype=np.uint8)
 
-        self.num_images = cfg['num_train' if load_train else 'num_test']
+        if load_images == False:
+            return
+
+        if override_num_images > 0:
+            self.num_images = override_num_images
+        else:
+            self.num_images = cfg['num_train' if load_train else 'num_test']
 
         if images_per_block == 0:
             images_per_block = self.num_images
@@ -49,7 +55,7 @@ class DecisionTreeDatasetConfig():
             assert arr_out.dtype == np.uint16
             for j in range(self.images_per_block):
                 img_idx = (i * self.images_per_block) + j
-                arr_out[j] = np.array(Image.open(__data_path(images_root, name, img_idx))).astype(np.uint16)
+                arr_out[j] = np.array(Image.open(images_root + str(img_idx).zfill(8) + '_' + name + '.png')).astype(np.uint16)
 
         self.depth_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i,a: get_image_block(i,a,'depth'), set_name + '/depth')
         self.labels_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i,a: get_image_block(i,a,'labels'), set_name + '/labels')
@@ -208,9 +214,9 @@ def make_random_feature():
 def make_random_threshold():
     return np.random.choice([-1, 1]) * np.power(np.e, np.random.uniform(0, FEATURE_THRESHOLD_MAX))
 
-def make_random_features(n):
+def make_random_features(n, arr):
     proposal_features = [(make_random_feature(), make_random_threshold()) for i in range(n)]
-    return np.array([(p[0][0][0], p[0][0][1], p[0][1][0], p[0][1][1], p[1]) for p in proposal_features ], dtype=np.float32)
+    arr[:] = np.array([(p[0][0][0], p[0][0][1], p[0][1][0], p[0][1][1], p[1]) for p in proposal_features ], dtype=np.float32)
 
 class DecisionTreeTrainer():
     def __init__(self, NUM_IMAGES_PER_IMAGE_BLOCK, NUM_PROPOSALS_PER_PROPOSAL_BLOCK):
@@ -262,9 +268,12 @@ class DecisionTreeTrainer():
         self.current_image_block_nodes_by_pixel_cpu = cu.pagelocked_zeros(image_block_dims, dtype=np.int32)
         self.current_image_block_nodes_by_pixel = cu_array.GPUArray(image_block_dims, dtype=np.int32)
 
+        self.current_proposals_block_cpu = cu.pagelocked_zeros((self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK, 5), dtype=np.float32)
         self.current_proposals_block = cu_array.GPUArray((self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK, 5), dtype=np.float32)
-        # this is by far the heaviest 
-        self.current_next_node_counts_by_feature_cu_block = cu_array.GPUArray((self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK, self.MAX_LEAF_NODES, dataset.num_classes()), dtype=np.uint64)
+
+        # due to memory limitations, we can only all tree nodes at once up to a certain depth - training more layers deep than this take twice as long per level because nodes are processed in batches
+        self.MAX_NEXT_NODES_TO_COUNT_PER_BLOCK = 2**17 
+        self.current_next_node_counts_by_feature_cu_block = cu_array.GPUArray((self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK, self.MAX_NEXT_NODES_TO_COUNT_PER_BLOCK, dataset.num_classes()), dtype=np.uint64)
 
         print('GPU allocations for tree trainer:')
         print('  node_counts:      ', sizeof_fmt(self.node_counts_cu.size * self.node_counts_cu.itemsize))
@@ -309,6 +318,8 @@ class DecisionTreeTrainer():
         self.active_nodes_cu.fill(np.int32(0))
         self.next_num_active_nodes_cu.fill(np.int32(1))
 
+        
+
         for current_level in range(self.MAX_TREE_DEPTH):
 
             print('training level', current_level)
@@ -322,59 +333,94 @@ class DecisionTreeTrainer():
             for ff in range(self.NUM_PROPOSAL_BLOCKS):
 
                 # print('  proposal block: ', ff)
+                
+                make_random_features(self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK, self.current_proposals_block_cpu)
+                self.current_proposals_block.set(self.current_proposals_block_cpu)
+                
 
-                self.current_proposals_block.set(make_random_features(self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK))
-                self.current_next_node_counts_by_feature_cu_block.fill(np.uint64(0))
+                # print('  generated..')
 
-                for ii in range(self.NUM_IMAGE_BLOCKS):
+                # current_level = 0, max_active_nodes_next_level = 2
+                #                 1                                4
+                #                 2                                8
+                #                 3                                16
 
-                    # print('  image block: ', ii)
+                # if at 0 level, there is (up to) 1 active node,  so next level could have 2 active nodes
+                # if at 1 level, there is (up to) 2 active nodes, so next level could have 4 active nodes
+                max_active_nodes_next_level = 2**(current_level+1)
 
-                    dataset.get_labels_block_cu(ii, self.current_image_block_labels)
-                    dataset.get_depth_block_cu(ii, self.current_image_block_depth)
+                if max_active_nodes_next_level > self.MAX_NEXT_NODES_TO_COUNT_PER_BLOCK:
+                    assert max_active_nodes_next_level % self.MAX_NEXT_NODES_TO_COUNT_PER_BLOCK == 0 # should just be powers of 2..
+                    num_node_blocks = max_active_nodes_next_level // self.MAX_NEXT_NODES_TO_COUNT_PER_BLOCK
+                    # print('num node blocks: ', num_node_blocks)
+                    node_blocks = [(i * self.MAX_NEXT_NODES_TO_COUNT_PER_BLOCK, (i+1) * self.MAX_NEXT_NODES_TO_COUNT_PER_BLOCK) for i in range(num_node_blocks)]
+                    # print(node_blocks)
+                else:
+                    node_blocks = [(0, max_active_nodes_next_level)]
+                    # print('1 node block')
+                    # print(node_blocks)
 
-                    self.nodes_by_pixel_compressed_blocks.get_block(ii, self.current_image_block_nodes_by_pixel)
+                for node_block_start, node_block_end in node_blocks:
 
-                    cu.Context.synchronize()
+                    self.current_next_node_counts_by_feature_cu_block.fill(np.uint64(0))
 
-                    bdx = MAX_THREADS_PER_BLOCK // self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK
-                    img_block_shape = self.current_image_block_depth.shape
-                    num_pixels_in_block = (img_block_shape[0] * img_block_shape[1] * img_block_shape[2])
+                    # print('filled..')
 
-                    gd = ((num_pixels_in_block // bdx) + 1, 1, 1)
-                    bd = (bdx, self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK, 1)
+                    for ii in range(self.NUM_IMAGE_BLOCKS):
 
-                    self.cu_eval_random_features(
-                        np.int32(self.NUM_IMAGES_PER_IMAGE_BLOCK),
-                        np.int32(dataset.img_dims[0]),
-                        np.int32(dataset.img_dims[1]),
+                        # print('  image block: ', ii)
+
+                        dataset.get_labels_block_cu(ii, self.current_image_block_labels)
+                        dataset.get_depth_block_cu(ii, self.current_image_block_depth)
+
+                        self.nodes_by_pixel_compressed_blocks.get_block(ii, self.current_image_block_nodes_by_pixel)
+
+                        # cu.Context.synchronize()
+
+                        bdx = MAX_THREADS_PER_BLOCK // self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK
+                        img_block_shape = self.current_image_block_depth.shape
+                        num_pixels_in_block = (img_block_shape[0] * img_block_shape[1] * img_block_shape[2])
+
+                        gd = ((num_pixels_in_block // bdx) + 1, 1, 1)
+                        bd = (bdx, self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK, 1)
+
+                        self.cu_eval_random_features(
+                            np.int32(self.NUM_IMAGES_PER_IMAGE_BLOCK),
+                            np.int32(dataset.img_dims[0]),
+                            np.int32(dataset.img_dims[1]),
+                            np.int32(self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK),
+                            np.int32(dataset.num_classes()),
+                            np.int32(self.MAX_TREE_DEPTH),
+                            np.int32(self.MAX_NEXT_NODES_TO_COUNT_PER_BLOCK),
+                            np.int32(node_block_start), # eligible node offset
+                            np.int32(node_block_end),
+                            self.current_image_block_labels,
+                            self.current_image_block_depth,
+                            self.current_proposals_block,
+                            self.current_image_block_nodes_by_pixel,
+                            self.current_next_node_counts_by_feature_cu_block,
+                            grid=gd, block=bd)
+
+                    pick_best_grid_dim = (int(num_active_nodes // MAX_THREADS_PER_BLOCK) + 1, 1, 1)
+                    pick_best_block_dim = (MAX_THREADS_PER_BLOCK, 1, 1)
+
+                    self.cu_pick_best_features(
+                        np.int32(num_active_nodes),
                         np.int32(self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK),
-                        np.int32(dataset.num_classes()),
                         np.int32(self.MAX_TREE_DEPTH),
-                        self.current_image_block_labels,
-                        self.current_image_block_depth,
-                        self.current_proposals_block,
-                        self.current_image_block_nodes_by_pixel,
+                        np.int32(self.MAX_NEXT_NODES_TO_COUNT_PER_BLOCK),
+                        np.int32(node_block_start),
+                        np.int32(node_block_end),
+                        np.int32(dataset.num_classes()),
+                        np.int32(current_level),
+                        self.active_nodes_cu,
+                        self.node_counts_cu,
                         self.current_next_node_counts_by_feature_cu_block,
-                        grid=gd, block=bd)
-
-                pick_best_grid_dim = (int(num_active_nodes // MAX_THREADS_PER_BLOCK) + 1, 1, 1)
-                pick_best_block_dim = (MAX_THREADS_PER_BLOCK, 1, 1)
-
-                self.cu_pick_best_features(
-                    np.int32(num_active_nodes),
-                    np.int32(self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK),
-                    np.int32(self.MAX_TREE_DEPTH),
-                    np.int32(dataset.num_classes()),
-                    np.int32(current_level),
-                    self.active_nodes_cu,
-                    self.node_counts_cu,
-                    self.current_next_node_counts_by_feature_cu_block,
-                    self.current_proposals_block,
-                    tree.tree_out_cu,
-                    self.next_node_counts_cu,
-                    self.best_gain_seen_per_node,
-                    grid=pick_best_grid_dim, block=pick_best_block_dim)
+                        self.current_proposals_block,
+                        tree.tree_out_cu,
+                        self.next_node_counts_cu,
+                        self.best_gain_seen_per_node,
+                        grid=pick_best_grid_dim, block=pick_best_block_dim)
 
             self.next_num_active_nodes_cu.fill(np.int32(0))
             self.next_active_nodes_cu.fill(np.int32(0))

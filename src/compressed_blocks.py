@@ -23,7 +23,7 @@ class CompressedBlocksDynamic():
         self.compressor_output_cu = cu_array.GPUArray((self.compressor_output_max_size(),), dtype=np.uint8)
         self.compressor_output_size = PagelockedCounter()
 
-        self.expected_compressor_output_max_size = 20000000 # 20 mb?
+        self.expected_compressor_output_max_size = 20000000 # 20 mb? this should be an input to the class..
         self.compressed_blocks = cu_array.GPUArray((num_blocks, self.expected_compressor_output_max_size,), dtype=np.uint8)
         self.compressed_block_sizes = [0 for _ in range(num_blocks)]
 
@@ -67,21 +67,22 @@ class CompressedBlocksDynamic():
         assert block_number >= 0 and block_number < self.num_blocks
         assert self.block_shape == block_cu.shape
 
+        self.decompressor_output_size.set(0)
+
         self.decompressor.configure(
             self.compressed_blocks[block_number].ptr,
             self.compressed_block_sizes[block_number],
             self.decompressor_temp_size.ptr,
             self.decompressor_output_size.ptr)
 
-        cu.Context.synchronize()
-
-        assert self.decompressor_output_size() == self.block_size
-
-        if self.decompressor_temp_size() > self.temp_size():
-            self.temp_size.set(self.decompressor_output_size())
-            del self.temp_cu
-            self.temp_cu = cu_array.GPUArray((self.temp_size,), dtype=np.uint8)
-            print('Reallocated temp space for decompressor. New size: ', sizeof_fmt(self.temp_size))
+        # don't get rid of this..
+        # cu.Context.synchronize()
+        # assert self.decompressor_output_size() == self.block_size
+        # if self.decompressor_temp_size() > self.temp_size():
+            # self.temp_size.set(self.decompressor_output_size())
+            # del self.temp_cu
+            # self.temp_cu = cu_array.GPUArray((self.temp_size,), dtype=np.uint8)
+            # print('Reallocated temp space for decompressor. New size: ', sizeof_fmt(self.temp_size))
         
         self.decompressor.decompress_async(
             self.compressed_blocks[block_number].ptr,
@@ -161,6 +162,8 @@ class CompressedBlocksStatic():
         max_decompressor_temp_size = 0
 
         for i in range(num_blocks):
+
+            self.decompressor_output_size.set(0)
 
             # first depth
             block_idx, block_compressed_size = self.block_idxes[i]
