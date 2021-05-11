@@ -93,7 +93,7 @@ class CompressedBlocksDynamic():
 
 
 class CompressedBlocksStatic():
-    def __init__(self, num_blocks, num_images_per_block, img_dims, get_img_path, images_name):
+    def __init__(self, num_blocks, num_images_per_block, img_dims, get_img_block, images_name):
 
         self.num_blocks = num_blocks
         self.block_shape = (num_images_per_block, img_dims[1], img_dims[0])
@@ -115,9 +115,7 @@ class CompressedBlocksStatic():
         compressed_blocks = []
 
         for i in range(num_blocks):
-            for j in range(num_images_per_block):
-                img_idx = (i * num_images_per_block) + j
-                block_np[j] = np.array(Image.open(get_img_path(img_idx))).astype(np.uint16)
+            get_img_block(i, block_np)
 
             # first compress depth
             uncompressed_block_cu.set(block_np)

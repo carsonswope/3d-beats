@@ -44,8 +44,15 @@ class DecisionTreeDatasetConfig():
         def __data_path(s, t, i):
             return s + '' + str(i).zfill(8) + '_' + t + '.png'
 
-        self.depth_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i : __data_path(images_root, 'depth', i), set_name + '/depth')
-        self.labels_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i : __data_path(images_root, 'labels', i), set_name + '/labels')
+        def get_image_block(i, arr_out, name):
+            assert arr_out.shape == (self.images_per_block, self.img_dims[1], self.img_dims[0])
+            assert arr_out.dtype == np.uint16
+            for j in range(self.images_per_block):
+                img_idx = (i * self.images_per_block) + j
+                arr_out[j] = np.array(Image.open(__data_path(images_root, name, img_idx))).astype(np.uint16)
+
+        self.depth_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i,a: get_image_block(i,a,'depth'), set_name + '/depth')
+        self.labels_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i,a: get_image_block(i,a,'labels'), set_name + '/labels')
     
     def num_classes(self):
         return len(self.id_to_color)
