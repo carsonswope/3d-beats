@@ -13,7 +13,7 @@ from util import MAX_UINT16
 
 np.set_printoptions(suppress=True)
 
-IMAGES_PER_TRAINING_BLOCK = 512
+IMAGES_PER_TRAINING_BLOCK = 256
 PROPOSALS_PER_PROPOSAL_BLOCK = 64
 
 print('compiling CUDA kernels..')
@@ -26,7 +26,7 @@ test_data = DecisionTreeDatasetConfig('datagen/sets/set1/', False) # just one si
 
 print('allocating GPU memory')
 NUM_RANDOM_FEATURES = 1024
-MAX_TREE_DEPTH = 20
+MAX_TREE_DEPTH = 16
 tree1 = DecisionTree(MAX_TREE_DEPTH, train_data.num_classes())
 decision_tree_trainer.allocate(train_data, NUM_RANDOM_FEATURES, tree1.max_depth)
 
