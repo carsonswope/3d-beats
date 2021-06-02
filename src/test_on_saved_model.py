@@ -9,14 +9,17 @@ from decision_tree import *
 
 np.set_printoptions(suppress=True)
 
+MODEL_OUT_NAME = 'models_out/set7.npy'
+DATASET_PATH ='datagen/sets/set7/'
+
 print('loading forest')
-forest = DecisionForest.load('models_out/model-filtered.npy')
+forest = DecisionForest.load(MODEL_OUT_NAME)
 
 print('compiling CUDA kernels..')
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading rwar data')
-dataset = DecisionTreeDatasetConfig('datagen/sets/set1/', load_images=True, load_train=False)
+dataset = DecisionTreeDatasetConfig(DATASET_PATH, load_images=True, load_train=False)
 
 dataset_test_depth = cu_array.GPUArray(dataset.images_shape(), dtype=np.uint16)
 dataset.get_depth_block_cu(0, dataset_test_depth)

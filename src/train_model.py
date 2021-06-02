@@ -16,13 +16,16 @@ np.set_printoptions(suppress=True)
 IMAGES_PER_TRAINING_BLOCK = 256
 PROPOSALS_PER_PROPOSAL_BLOCK = 256
 
+MODEL_OUT_NAME = 'models_out/set7.npy'
+DATASET_PATH ='datagen/sets/set7/'
+
 print('compiling CUDA kernels..')
 decision_tree_trainer = DecisionTreeTrainer(IMAGES_PER_TRAINING_BLOCK, PROPOSALS_PER_PROPOSAL_BLOCK)
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading training data')
-train_data = DecisionTreeDatasetConfig('datagen/sets/set1/', load_images=True, load_train=True, images_per_block=IMAGES_PER_TRAINING_BLOCK, override_num_images=256)
-test_data = DecisionTreeDatasetConfig('datagen/sets/set1/', load_images=True, load_train=False) # just one single block for test data
+train_data = DecisionTreeDatasetConfig(DATASET_PATH, load_images=True, load_train=True, images_per_block=IMAGES_PER_TRAINING_BLOCK)
+test_data = DecisionTreeDatasetConfig(DATASET_PATH, load_images=True, load_train=False) # just one single block for test data
 
 print('allocating GPU memory')
 NUM_RANDOM_FEATURES = 2048
@@ -85,7 +88,7 @@ pct_match =  np.sum(test_output_labels == test_labels_cpu) / np.sum(test_labels_
 print('FOREST pct. matching pixels: ', pct_match)
 
 print('saving model output!')
-np.save('models_out/model-filtered.npy', forest_cpu)
+np.save(MODEL_OUT_NAME, forest_cpu)
 
 """
 print('saving forest renders..')

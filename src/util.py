@@ -12,10 +12,14 @@ def sizeof_fmt(num, suffix='B'):
 class PagelockedCounter:
     def __init__(self):
         self.d = cu.pagelocked_zeros((1,), np.int64)
-    
+
     @property
-    def ptr(self):
-        return self.d.__array_interface__['data'][0]
+    def __array_interface__(self):
+        return self.d.__array_interface__
+    
+    # @property
+    # def ptr(self):
+        # return self.d.__array_interface__['data'][0]
     
     def set(self, new_count):
         self.d[0] = new_count

@@ -12,9 +12,12 @@ np.set_printoptions(suppress=True)
 
 import time
 
+MODEL_OUT_NAME = 'models_out/set7.npy'
+DATASET_PATH ='datagen/sets/set7/'
+
 print('loading forest')
-forest = DecisionForest.load('models_out/model-filtered.npy')
-data_config = DecisionTreeDatasetConfig('datagen/sets/set3/', load_images=False)
+forest = DecisionForest.load(MODEL_OUT_NAME)
+data_config = DecisionTreeDatasetConfig(DATASET_PATH, load_images=False)
 
 print('compiling CUDA kernels..')
 decision_tree_evaluator = DecisionTreeEvaluator()
