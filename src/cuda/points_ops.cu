@@ -160,4 +160,114 @@ void setup_depth_image_for_forest(
 
 }}
 
+extern "C" {__global__
+void apply_point_mapping(
+        int IMG_DIM_X,
+        int IMG_DIM_Y,
+        int NUM_COLORS,
+        uint8* _colors,
+        uint8* _color_image) {
+    
+    const int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+    const int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+    if (x >= IMG_DIM_X || y >= IMG_DIM_Y) return;
+
+    Array2d<uint8> colors(_colors, {NUM_COLORS, 3});
+    Array3d<uint8> color_image(_color_image, {IMG_DIM_Y, IMG_DIM_X, 3});
+
+    auto* color_image_pixel = color_image.get_ptr({y, x, 0});
+    if (color_image_pixel[0] + color_image_pixel[1] + color_image_pixel[2] == 0) return;
+
+    float best_squared_diff = -1.f;
+    uint8* best_colors_ptr = nullptr;
+
+    for (int i = 0; i < NUM_COLORS; i++) {
+        auto* test_color = colors.get_ptr({i, 0});
+        float squared_diff = 0;
+        for (int j = 0; j < 3; j++) {
+            const float diff = (color_image_pixel[j] * 1.f) - test_color[j];
+            squared_diff += diff * diff;
+        }
+        if (best_colors_ptr == nullptr || squared_diff < best_squared_diff) {
+            best_squared_diff = squared_diff;
+            best_colors_ptr = test_color;
+        }
+    }
+
+    // or memcpy..
+    for (int j =0; j < 3; j++) {
+        color_image_pixel[j] = best_colors_ptr[j];
+    }
+}}
+
+extern "C" {__global__
+void split_pixels_by_nearest_color(
+        int IMG_DIM_X,
+        int IMG_DIM_Y,
+        int NUM_COLORS,
+        uint8* _colors,
+        uint8* _color_image,
+        // int* _pixels_per_group,
+        uint64* _pixel_counts_per_group) {
+    
+    const int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+    const int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+    if (x >= IMG_DIM_X || y >= IMG_DIM_Y) return;
+
+    Array2d<uint8> colors(_colors, {NUM_COLORS, 3});
+    Array3d<uint8> color_image(_color_image, {IMG_DIM_Y, IMG_DIM_X, 3});
+    Array2d<uint64> pixel_counts_per_group(_pixel_counts_per_group, {NUM_COLORS, 5}); // (num_pixels, sum_r, sum_g, sum_b, sum_cost)
+    
+    float best_squared_diff = -1.f;
+    int best_colors_idx = -1;
+
+    auto* color_image_pixel = color_image.get_ptr({y, x, 0});
+    if (color_image_pixel[0] + color_image_pixel[1] + color_image_pixel[2] == 0) return;
+
+    for (int i = 0; i < NUM_COLORS; i++) {
+        auto* test_color = colors.get_ptr({i, 0});
+        float squared_diff = 0;
+        for (int j = 0; j < 3; j++) {
+            const float diff = (color_image_pixel[j] * 1.f) - test_color[j];
+            squared_diff += diff * diff;
+        }
+        // if (true) {
+        if (best_colors_idx == -1 || squared_diff < best_squared_diff) {
+            best_squared_diff = squared_diff;
+            best_colors_idx = i;
+        }
+    }
+
+    // if (best_colors_idx == -1 || best_colors_idx >= NUM_COLORS) {
+    //     printf("err! %i %i\n", x, y);
+    // }
+
+    // if (x == 0 && y ==0 ){ 
+    //     printf("nc: %i\n", NUM_COLORS);
+    //     printf("best_colrosidx: %i\n", best_colors_idx);
+    //     printf("best sq df: %f\n", best_squared_diff);
+    // }
+    // if (best_colors_idx != 0) {
+        // printf("huh?\n");
+    // }
+
+    uint64* p = pixel_counts_per_group.get_ptr({best_colors_idx, 0});
+    atomicAdd(p + 0, 1);
+    atomicAdd(p + 1, uint64(color_image_pixel[0]));
+    atomicAdd(p + 2, uint64(color_image_pixel[1]));
+    atomicAdd(p + 3, uint64(color_image_pixel[2]));
+    atomicAdd((double*)p+4, (double)best_squared_diff);
+
+
+    // auto pixel_num = atomicAdd(pixel_counts_per_group, 1);
+
+    // or memcpy..
+    // for (int j =0; j < 3; j++) {
+        // color_image_pixel[j] = best_colors_ptr[j];
+    // }
+}}
+  
+
+
+
 // setup_depth_image_for_forest

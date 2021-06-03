@@ -9,4 +9,5 @@ class PointsOps():
         self.find_plane_ransac = cu_mod.get_function('find_plane_ransac')
         self.filter_points_by_plane = cu_mod.get_function('filter_points_by_plane')
         self.setup_depth_image_for_forest = cu_mod.get_function('setup_depth_image_for_forest')
-
+        self.apply_point_mapping = cu_mod.get_function('apply_point_mapping')
+        self.split_pixels_by_nearest_color = cu_mod.get_function('split_pixels_by_nearest_color')
