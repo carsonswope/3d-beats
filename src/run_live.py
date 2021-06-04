@@ -12,55 +12,55 @@ np.set_printoptions(suppress=True)
 
 import time
 
-MODEL_OUT_NAME = 'models_out/set7.npy'
-DATASET_PATH ='datagen/sets/set7/'
+MODEL_OUT_NAME = 'models_out/live1.npy'
+DATASET_PATH ='datagen/sets/live1/data/'
+
+RS_BAG = 'datagen/sets/live1/t2.bag'
 
 print('loading forest')
 forest = DecisionForest.load(MODEL_OUT_NAME)
-data_config = DecisionTreeDatasetConfig(DATASET_PATH, load_images=False)
+data_config = DecisionTreeDatasetConfig(DATASET_PATH)
 
 print('compiling CUDA kernels..')
 decision_tree_evaluator = DecisionTreeEvaluator()
 points_ops = PointsOps()
-
-print('initializing camera..')
-# Configure depth and color streams
-pipeline = rs.pipeline()
-config = rs.config()
-
-"""
-spatial_filter = rs.spatial_filter()
-spatial_filter.set_option(rs.option.filter_magnitude, 2.0)
-spatial_filter.set_option(rs.option.filter_smooth_alpha, 0.5)
-spatial_filter.set_option(rs.option.filter_smooth_delta, 20.0)
-spatial_filter.set_option(rs.option.holes_fill, 2.) # 4 pixels radius
-"""
-
-# Get device product line for setting a supporting resolution
-pipeline_wrapper = rs.pipeline_wrapper(pipeline)
-pipeline_profile = config.resolve(pipeline_wrapper)
-device = pipeline_profile.get_device()
-
-device_config_json = open('hand_config.json', 'r').read()
-rs.rs400_advanced_mode(device).load_json(device_config_json)
-
-device.first_depth_sensor().set_option(rs.option.depth_units, 0.0001)
 
 DIM_X = 848
 DIM_Y = 480
 FOCAL = 615.
 pts_cu = cu_array.GPUArray((DIM_Y, DIM_X, 4), dtype=np.float32)
 
+print('initializing camera..')
+# Configure depth and color streams
+pipeline = rs.pipeline()
+config = rs.config()
+
+if RS_BAG:
+    config.enable_device_from_file(RS_BAG, repeat_playback=True)
+    config.enable_stream(rs.stream.depth, rs.format.z16, 30)
+    config.enable_stream(rs.stream.color, rs.format.rgb8, 30)
+
+else:
+    # Get device product line for setting a supporting resolution
+    pipeline_wrapper = rs.pipeline_wrapper(pipeline)
+    pipeline_profile = config.resolve(pipeline_wrapper)
+    device = pipeline_profile.get_device()
+    device_config_json = open('hand_config.json', 'r').read()
+    rs.rs400_advanced_mode(device).load_json(device_config_json)
+    device.first_depth_sensor().set_option(rs.option.depth_units, 0.0001)
+    config.enable_stream(rs.stream.depth, DIM_X, DIM_Y, rs.format.z16, 90)
+
 NUM_RANDOM_GUESSES = 10000
 candidate_planes_cu = cu_array.GPUArray((NUM_RANDOM_GUESSES, 4, 4), dtype=np.float32)
 num_inliers_cu = cu_array.GPUArray((NUM_RANDOM_GUESSES), dtype=np.int32)
 
-config.enable_stream(rs.stream.depth, DIM_X, DIM_Y, rs.format.z16, 90)
 
 depth_image_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
 labels_image_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
 
 profile = pipeline.start(config)
+if RS_BAG:
+    profile.get_device().as_playback().set_real_time(False)
 depth_profile = profile.get_stream(rs.stream.depth).as_video_stream_profile()
 
 PLANE_Z_OUTLIER_THRESHOLD = 40.
@@ -127,7 +127,6 @@ try:
         if frame_num < 15:
             frame_num += 1
             continue
-        # filtered_depth_frame = spatial_filter.process(depth_frame)
 
         # Convert images to numpy arrays
         depth_image = np.asanyarray(depth_frame.get_data())

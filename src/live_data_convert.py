@@ -27,6 +27,7 @@ how to generate properly labeled dataset given:
 
 IN_PATH = './datagen/sets/live1/t2.bag'
 OUT_PATH = './datagen/sets/live1/data/'
+OUT_PREFIX = 'live1'
 
 import pyrealsense2 as rs
 import numpy as np
@@ -42,12 +43,13 @@ np.set_printoptions(suppress=True)
 
 from PIL import Image
 
+from util import MAX_UINT16
+
 points_ops = PointsOps()
 
 pipeline = rs.pipeline()
 config = rs.config()
 config.enable_device_from_file(IN_PATH, repeat_playback=False)
-# rs.config.enable_device_from_file(config, IN_PATH)
 
 config.enable_stream(rs.stream.depth, rs.format.z16, 30)
 config.enable_stream(rs.stream.color, rs.format.rgb8, 30)
@@ -295,9 +297,11 @@ while True:
     for xx in range(NUM_COLORS):
         labels_image[np.where(np.all(color_image == color_mapping[xx], axis=2))] = xx + 1 # group 0 is null group, starts at 1
 
-    Image.fromarray(labels_image).save(f'{OUT_PATH}/train{str(frame_count - 1).zfill(8)}_labels.png')
-    Image.fromarray(color_image_rgba).save(f'{OUT_PATH}/train{str(frame_count - 1).zfill(8)}_colors.png')
-    Image.fromarray(depth_np).save(f'{OUT_PATH}/train{str(frame_count - 1).zfill(8)}_depth.png')
+    depth_np[depth_np == 0] = MAX_UINT16
+
+    Image.fromarray(labels_image).save(f'{OUT_PATH}/{str(frame_count - 1).zfill(8)}_labels.png')
+    Image.fromarray(color_image_rgba).save(f'{OUT_PATH}/{str(frame_count - 1).zfill(8)}_colors.png')
+    Image.fromarray(depth_np).save(f'{OUT_PATH}/{str(frame_count - 1).zfill(8)}_depth.png')
 
     color_image = cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR)
 
@@ -312,8 +316,7 @@ while True:
 # write json config at the end of it..
 obj= {}
 obj['img_dims'] = [DIM_X, DIM_Y]
-obj['num_train'] = frame_count
-obj['num_test'] = 0
+obj['num_images'] = frame_count
 obj['id_to_color'] = {'0': [0, 0, 0, 0]}
 for c_id in range(NUM_COLORS):
     c = color_mapping[c_id]

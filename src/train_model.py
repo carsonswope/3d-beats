@@ -13,19 +13,22 @@ from util import MAX_UINT16
 
 np.set_printoptions(suppress=True)
 
-IMAGES_PER_TRAINING_BLOCK = 256
+IMAGES_PER_TRAINING_BLOCK = 16
 PROPOSALS_PER_PROPOSAL_BLOCK = 256
 
-MODEL_OUT_NAME = 'models_out/set7.npy'
-DATASET_PATH ='datagen/sets/set7/'
+MODEL_OUT_NAME = 'models_out/live1.npy'
+DATASET_PATH ='datagen/sets/live1/data/'
 
 print('compiling CUDA kernels..')
 decision_tree_trainer = DecisionTreeTrainer(IMAGES_PER_TRAINING_BLOCK, PROPOSALS_PER_PROPOSAL_BLOCK)
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading training data')
-train_data = DecisionTreeDatasetConfig(DATASET_PATH, load_images=True, load_train=True, images_per_block=IMAGES_PER_TRAINING_BLOCK)
-test_data = DecisionTreeDatasetConfig(DATASET_PATH, load_images=True, load_train=False) # just one single block for test data
+train_data, test_data = DecisionTreeDatasetConfig.multiple(DATASET_PATH, [
+    # train data
+    (32, IMAGES_PER_TRAINING_BLOCK, 'train'),
+    # test data. None = just one block!
+    (8, None, 'test')])
 
 print('allocating GPU memory')
 NUM_RANDOM_FEATURES = 2048

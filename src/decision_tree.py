@@ -11,14 +11,36 @@ from util import sizeof_fmt, MAX_UINT16
 
 MAX_THREADS_PER_BLOCK = 1024 # cuda constant..
 
-
-
 # configuration for a decision tree dataset.
 # image size
 # mapping from label colors to int IDs
 class DecisionTreeDatasetConfig():
 
-    def __init__(self, dataset_dir, load_images=True, load_train=True, override_num_images=-1, images_per_block=0):
+    # randomly split up dataset into chunks of the requested size
+    def multiple(dataset_dir, images):
+
+        total_images = json.loads(open(dataset_dir + 'config.json').read())['num_images']
+        num_images_to_fetch = sum([num_images for num_images, _, _ in images])
+        assert num_images_to_fetch <= total_images
+
+        images_to_fetch = list(range(total_images))
+        np.random.shuffle(images_to_fetch)
+
+        datasets = []
+        start_i = 0
+        for num_images, images_per_block, imgs_name in images:
+            images_per_block = images_per_block or num_images
+
+            datasets.append(DecisionTreeDatasetConfig(dataset_dir, 
+                num_images=num_images,
+                images_per_block=images_per_block,
+                imgs_name=imgs_name,
+                img_idxes=images_to_fetch[start_i:start_i+num_images]))
+            start_i += num_images
+
+        return tuple(datasets)
+
+    def __init__(self, dataset_dir, num_images=0, images_per_block=0, imgs_name='data0', img_idxes=None):
 
         self.dataset_dir = dataset_dir
         cfg = json.loads(open(dataset_dir + 'config.json').read())
@@ -28,38 +50,30 @@ class DecisionTreeDatasetConfig():
         for i,c in cfg['id_to_color'].items():
             self.id_to_color[int(i)] = np.array(c, dtype=np.uint8)
 
-        if load_images == False:
+        if num_images == 0:
             return
 
-        if override_num_images > 0:
-            self.num_images = override_num_images
-        else:
-            self.num_images = cfg['num_train' if load_train else 'num_test']
+        self.num_images = num_images
+        self.images_per_block = images_per_block or self.num_images
 
-        if images_per_block == 0:
-            images_per_block = self.num_images
-        self.images_per_block = images_per_block
-        
         assert self.num_images % self.images_per_block == 0
         self.num_image_blocks = self.num_images // self.images_per_block
 
-        set_name= 'train' if load_train else 'test'
-
-        images_root = dataset_dir + set_name
-
-        def __data_path(s, t, i):
-            return s + '' + str(i).zfill(8) + '_' + t + '.png'
+        if img_idxes:
+            assert len(img_idxes) == num_images
 
         def get_image_block(i, arr_out, name):
             assert arr_out.shape == (self.images_per_block, self.img_dims[1], self.img_dims[0])
             assert arr_out.dtype == np.uint16
             for j in range(self.images_per_block):
                 img_idx = (i * self.images_per_block) + j
-                arr_out[j] = np.array(Image.open(images_root + str(img_idx).zfill(8) + '_' + name + '.png')).astype(np.uint16)
+                if img_idxes:
+                    img_idx = img_idxes[img_idx]
+                arr_out[j] = np.array(Image.open(f'{dataset_dir}/{str(img_idx).zfill(8)}_{name}.png')).astype(np.uint16)
 
-        self.depth_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i,a: get_image_block(i,a,'depth'), set_name + '/depth')
-        self.labels_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i,a: get_image_block(i,a,'labels'), set_name + '/labels')
-    
+        self.depth_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i,a: get_image_block(i,a,'depth'), imgs_name + '/depth')
+        self.labels_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i,a: get_image_block(i,a,'labels'), imgs_name + '/labels')
+
     def num_classes(self):
         return len(self.id_to_color)
 
