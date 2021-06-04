@@ -4,6 +4,7 @@ class PointsOps():
     def __init__(self):
         cu_mod = py_nvcc_utils.get_module('src/cuda/points_ops.cu')
         self.deproject_points = cu_mod.get_function('deproject_points')
+        self.depths_from_points = cu_mod.get_function('depths_from_points')
         self.transform_points = cu_mod.get_function('transform_points')
         self.make_plane_candidates = cu_mod.get_function('make_plane_candidates')
         self.find_plane_ransac = cu_mod.get_function('find_plane_ransac')

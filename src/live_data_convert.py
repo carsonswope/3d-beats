@@ -26,7 +26,7 @@ how to generate properly labeled dataset given:
 """
 
 IN_PATH = './datagen/sets/live1/t2.bag'
-OUT_PATH = './datagen/sets/live1/'
+OUT_PATH = './datagen/sets/live1/data/'
 
 import pyrealsense2 as rs
 import numpy as np
@@ -40,16 +40,20 @@ from decision_tree import *
 from cuda.points_ops import *
 np.set_printoptions(suppress=True)
 
+from PIL import Image
+
 points_ops = PointsOps()
 
 pipeline = rs.pipeline()
 config = rs.config()
-rs.config.enable_device_from_file(config, IN_PATH)
+config.enable_device_from_file(IN_PATH, repeat_playback=False)
+# rs.config.enable_device_from_file(config, IN_PATH)
 
 config.enable_stream(rs.stream.depth, rs.format.z16, 30)
 config.enable_stream(rs.stream.color, rs.format.rgb8, 30)
 
-pipeline.start(config)
+pf = pipeline.start(config)
+pf.get_device().as_playback().set_real_time(False)
 
 # Create opencv window to render image in
 cv2.namedWindow("Depth Stream", cv2.WINDOW_AUTOSIZE)
@@ -182,10 +186,22 @@ def make_color_mapping():
 
     return best_colors
 
+labels_image = np.zeros((DIM_Y, DIM_X), dtype=np.uint16)
+
+color_image_rgba = np.zeros((DIM_Y, DIM_X, 4),dtype=np.uint8)
+
 # Streaming loop
+frame_count = 0
 while True:
     # Get frameset of depth
-    frames = pipeline.wait_for_frames()
+    try:
+        # are there double frames
+        frames = pipeline.wait_for_frames(1000)
+    except:
+        print('concluded !')
+        break
+
+    frame_count += 1
 
     # Get depth frame
     depth_frame = frames.get_depth_frame()
@@ -227,9 +243,25 @@ while True:
         grid=grid_dim2,
         block=block_dim2)
 
-    pts_np = pts_cu.get()
+    points_ops.transform_points(
+        np.int32(DIM_X * DIM_Y),
+        pts_cu,
+        np.linalg.inv(calibrated_plane),
+        grid=grid_dim2,
+        block=block_dim2)
+    
+    depth_cu.fill(np.uint16(0))
 
-    depth_np[pts_np[:,:,3] == 0.0] = 0
+    points_ops.depths_from_points(
+        np.array([1, DIM_X, DIM_Y, -1], dtype=np.int32),
+        depth_cu,
+        pts_cu,
+        grid=grid_dim,
+        block=block_dim)
+
+    # copy back to cpu-side depth frame memory, so align processing block can run
+    depth_cu.get(depth_np)
+
     frames_aligned = align.process(frames)
     color_frame = frames_aligned.get_color_frame()
 
@@ -254,6 +286,18 @@ while True:
         block=block_dim3)
 
     color_image_cu.get(color_image)
+    color_image_rgba[:,:,0:3] = color_image
+    # transparency...
+    color_image_rgba[np.all(color_image > 0, axis=2),3] = 255
+
+    # convert color image to
+    labels_image[:,:] = 0
+    for xx in range(NUM_COLORS):
+        labels_image[np.where(np.all(color_image == color_mapping[xx], axis=2))] = xx + 1 # group 0 is null group, starts at 1
+
+    Image.fromarray(labels_image).save(f'{OUT_PATH}/train{str(frame_count - 1).zfill(8)}_labels.png')
+    Image.fromarray(color_image_rgba).save(f'{OUT_PATH}/train{str(frame_count - 1).zfill(8)}_colors.png')
+    Image.fromarray(depth_np).save(f'{OUT_PATH}/train{str(frame_count - 1).zfill(8)}_depth.png')
 
     color_image = cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR)
 
@@ -264,3 +308,21 @@ while True:
     if key == 27:
         cv2.destroyAllWindows()
         break
+
+# write json config at the end of it..
+obj= {}
+obj['img_dims'] = [DIM_X, DIM_Y]
+obj['num_train'] = frame_count
+obj['num_test'] = 0
+obj['id_to_color'] = {'0': [0, 0, 0, 0]}
+for c_id in range(NUM_COLORS):
+    c = color_mapping[c_id]
+    obj['id_to_color'][str(c_id + 1)] = [int(c[0]), int(c[1]), int(c[2]), 255]
+
+cfg_json_file = open(f'{OUT_PATH}/config.json', 'w')
+cfg_json_file.write(json.dumps(obj))
+cfg_json_file.close()
+
+# print('hi')
+
+# DIMobprint('hi')

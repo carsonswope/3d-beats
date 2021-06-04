@@ -33,7 +33,33 @@ void deproject_points(
 
         pts.set({i, y, x}, p);
     }
+}}
 
+// given a depth image, 
+extern "C" {__global__
+void depths_from_points(
+        int4 imgs_dim, // (num_images, dimx, dimy)
+        // float2 pp, // (ppx, ppy)
+        // float f, // focal length
+        uint16* _imgs,
+        float4* _pts) {
+        
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    const int x = blockIdx.y * blockDim.y + threadIdx.y;
+    const int y = blockIdx.z * blockDim.z + threadIdx.z;
+
+    const int num_images = imgs_dim.x;
+    const int2 img_dim = {imgs_dim.y, imgs_dim.z};
+
+    if (i >= num_images || x >= img_dim.x || y >= img_dim.y) return;
+
+    Array3d<uint16> imgs(_imgs, {num_images,img_dim.y,img_dim.x});
+    Array3d<float4> pts(_pts, {num_images,img_dim.y,img_dim.x}, {0., 0., 0., 0.});
+    
+    const float4 pos = pts.get({i, y, x});
+    if (pos.w > 0.f) {
+        imgs.set({i, y, x}, (uint16)pos.z);
+    }
 }}
 
 extern "C" {__global__
@@ -88,10 +114,11 @@ void filter_points_by_plane(
     if (pt.w != 1.) return;
 
     if (pt.z > -PLANE_Z_FILTER_THRESHOLD) {
-        pts[i].x = 0.;
-        pts[i].y = 0.;
-        pts[i].z = 0.;
-        pts[i].w = 0.;
+        pts[i] = {0., 0., 0., 0.};
+        // .x = 0.;
+        // pts[i].y = 0.;
+        // pts[i].z = 0.;
+        // pts[i].w = 0.;
     }
     
 }}
