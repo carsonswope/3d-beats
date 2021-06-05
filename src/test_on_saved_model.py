@@ -9,8 +9,8 @@ from decision_tree import *
 
 np.set_printoptions(suppress=True)
 
-MODEL_OUT_NAME = 'models_out/live1.npy'
-DATASET_PATH ='datagen/sets/live1/data/'
+MODEL_OUT_NAME = 'models_out/live10.npy'
+DATASET_PATH ='datagen/sets/live1/data9/'
 
 print('loading forest')
 forest = DecisionForest.load(MODEL_OUT_NAME)
@@ -19,7 +19,7 @@ print('compiling CUDA kernels..')
 decision_tree_evaluator = DecisionTreeEvaluator()
 
 print('loading rwar data')
-dataset = DecisionTreeDatasetConfig(DATASET_PATH, num_images=8, imgs_name='test')
+dataset = DecisionTreeDatasetConfig(DATASET_PATH, num_images=16, imgs_name='test', randomize=True)
 
 dataset_test_depth = cu_array.GPUArray(dataset.images_shape(), dtype=np.uint16)
 dataset.get_depth_block_cu(0, dataset_test_depth)

@@ -13,11 +13,11 @@ from util import MAX_UINT16
 
 np.set_printoptions(suppress=True)
 
-IMAGES_PER_TRAINING_BLOCK = 16
+IMAGES_PER_TRAINING_BLOCK = 256
 PROPOSALS_PER_PROPOSAL_BLOCK = 256
 
-MODEL_OUT_NAME = 'models_out/live1.npy'
-DATASET_PATH ='datagen/sets/live1/data/'
+MODEL_OUT_NAME = 'models_out/live10.npy'
+DATASET_PATH ='datagen/sets/live1/data9/'
 
 print('compiling CUDA kernels..')
 decision_tree_trainer = DecisionTreeTrainer(IMAGES_PER_TRAINING_BLOCK, PROPOSALS_PER_PROPOSAL_BLOCK)
@@ -26,20 +26,20 @@ decision_tree_evaluator = DecisionTreeEvaluator()
 print('loading training data')
 train_data, test_data = DecisionTreeDatasetConfig.multiple(DATASET_PATH, [
     # train data
-    (32, IMAGES_PER_TRAINING_BLOCK, 'train'),
+    (1024, IMAGES_PER_TRAINING_BLOCK, 'train'),
     # test data. None = just one block!
-    (8, None, 'test')])
+    (128, None, 'test')])
 
 print('allocating GPU memory')
 NUM_RANDOM_FEATURES = 2048
-MAX_TREE_DEPTH = 20
+MAX_TREE_DEPTH = 18
 tree1 = DecisionTree(MAX_TREE_DEPTH, train_data.num_classes())
 decision_tree_trainer.allocate(train_data, NUM_RANDOM_FEATURES, tree1.max_depth)
 
 # allocate space for evaluated classes on test data
 test_output_labels_cu = cu_array.GPUArray(test_data.images_shape(), dtype=np.uint16)
 
-TREES_IN_FOREST = 1
+TREES_IN_FOREST = 4
 best_trees = [None for t in range(TREES_IN_FOREST)]
 tree_cpu = np.zeros((tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
 forest_cpu = np.zeros((TREES_IN_FOREST, tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
@@ -51,7 +51,7 @@ test_labels_cpu = test_labels_cu.get()
 test_depth_cu = cu_array.GPUArray(test_data.images_shape(), dtype=np.uint16)
 test_data.get_depth_block_cu(0, test_depth_cu)
 
-for i in range(1):
+for i in range(8):
     print('training tree..')
     decision_tree_trainer.train(train_data, tree1)
 

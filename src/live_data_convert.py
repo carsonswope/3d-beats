@@ -25,9 +25,8 @@ how to generate properly labeled dataset given:
 5. profit
 """
 
-IN_PATH = './datagen/sets/live1/t2.bag'
-OUT_PATH = './datagen/sets/live1/data/'
-OUT_PREFIX = 'live1'
+IN_PATH = './datagen/sets/live1/t13.bag'
+OUT_PATH = './datagen/sets/live1/data9/'
 
 import pyrealsense2 as rs
 import numpy as np
@@ -51,8 +50,8 @@ pipeline = rs.pipeline()
 config = rs.config()
 config.enable_device_from_file(IN_PATH, repeat_playback=False)
 
-config.enable_stream(rs.stream.depth, rs.format.z16, 30)
-config.enable_stream(rs.stream.color, rs.format.rgb8, 30)
+config.enable_stream(rs.stream.depth, rs.format.z16)
+config.enable_stream(rs.stream.color, rs.format.rgb8)
 
 pf = pipeline.start(config)
 pf.get_device().as_playback().set_real_time(False)
@@ -77,7 +76,7 @@ num_inliers_cu = cu_array.GPUArray((NUM_RANDOM_GUESSES), dtype=np.int32)
 
 PLANE_Z_OUTLIER_THRESHOLD = 55.
 
-NUM_COLORS = 3
+NUM_COLORS = 7
 
 rand_generator = cu_rand.XORWOWRandomNumberGenerator(seed_getter=cu_rand.seed_getter_unique)
 rand_cu = cu_array.GPUArray((NUM_RANDOM_GUESSES, 32), dtype=np.float32)
@@ -199,6 +198,14 @@ while True:
     try:
         # are there double frames
         frames = pipeline.wait_for_frames(1000)
+
+        df_time = frames.get_depth_frame().get_timestamp()
+        cf_time = frames.get_color_frame().get_timestamp()
+        if np.abs(df_time - cf_time) > 6.:
+            # print('-skip-')
+            continue
+        # else:
+            # print('not skip!!')
     except:
         print('concluded !')
         break
@@ -207,6 +214,11 @@ while True:
 
     # Get depth frame
     depth_frame = frames.get_depth_frame()
+
+    
+
+    # print('df s: ', depth_frame.get_timestamp())
+    # print('cl ts: ', frames.get_color_frame().get_timestamp())
 
     depth_np = np.asanyarray(depth_frame.data)
     depth_cu.set(depth_np)
@@ -268,6 +280,17 @@ while True:
     color_frame = frames_aligned.get_color_frame()
 
     color_image = np.asanyarray(color_frame.get_data())
+    
+    # color_image = cv2.cvtColor(color_image, cv2.COLOR_RGB2HLS)
+    # color_image[color_image[:,:,1] > 127,1] = 127
+    # color_image
+    # color_image[color_image[:,:,2] ]
+    # color_image[]
+    # color_image_active_pixels = np.where(np.any(color_image > 0, axis=2))
+    # color_image[color_image_active_pixels[0], color_image_active_pixels[1] ,1] = 127
+    # color_image[color_image_active_pixels[0], color_image_active_pixels[1] ,2] = 255
+    # color_image = cv2.cvtColor(color_image, cv2.COLOR_HLS2RGB)
+    
 
     color_image_cu.set(color_image)
 
@@ -287,10 +310,13 @@ while True:
         grid=grid_dim3,
         block=block_dim3)
 
+    
     color_image_cu.get(color_image)
+    color_image_rgba[:,:,3] = 0
     color_image_rgba[:,:,0:3] = color_image
     # transparency...
-    color_image_rgba[np.all(color_image > 0, axis=2),3] = 255
+    color_image_rgba[np.any(color_image > 0, axis=2),3] = 255
+    
 
     # convert color image to
     labels_image[:,:] = 0

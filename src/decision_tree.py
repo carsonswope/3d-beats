@@ -40,7 +40,7 @@ class DecisionTreeDatasetConfig():
 
         return tuple(datasets)
 
-    def __init__(self, dataset_dir, num_images=0, images_per_block=0, imgs_name='data0', img_idxes=None):
+    def __init__(self, dataset_dir, num_images=0, images_per_block=0, imgs_name='data0', img_idxes=None, randomize=False):
 
         self.dataset_dir = dataset_dir
         cfg = json.loads(open(dataset_dir + 'config.json').read())
@@ -58,6 +58,16 @@ class DecisionTreeDatasetConfig():
 
         assert self.num_images % self.images_per_block == 0
         self.num_image_blocks = self.num_images // self.images_per_block
+
+        if randomize and img_idxes:
+            print('img idxes and randmize cant both be true')
+            assert False
+        
+        if randomize:
+            total_images = cfg['num_images']
+            img_idxes = list(range(total_images))
+            np.random.shuffle(img_idxes)
+            img_idxes = img_idxes[0:self.num_images]
 
         if img_idxes:
             assert len(img_idxes) == num_images

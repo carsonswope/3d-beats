@@ -12,10 +12,11 @@ np.set_printoptions(suppress=True)
 
 import time
 
-MODEL_OUT_NAME = 'models_out/live1.npy'
-DATASET_PATH ='datagen/sets/live1/data/'
+MODEL_OUT_NAME = 'models_out/live10.npy'
+DATASET_PATH ='datagen/sets/live1/data9/'
 
-RS_BAG = 'datagen/sets/live1/t2.bag'
+RS_BAG = None
+# RS_BAG = 'datagen/sets/live1/t2.bag'
 
 print('loading forest')
 forest = DecisionForest.load(MODEL_OUT_NAME)
@@ -63,7 +64,7 @@ if RS_BAG:
     profile.get_device().as_playback().set_real_time(False)
 depth_profile = profile.get_stream(rs.stream.depth).as_video_stream_profile()
 
-PLANE_Z_OUTLIER_THRESHOLD = 40.
+PLANE_Z_OUTLIER_THRESHOLD = 60.
 
 rand_generator = cu_rand.XORWOWRandomNumberGenerator(seed_getter=cu_rand.seed_getter_unique)
 rand_cu = cu_array.GPUArray((NUM_RANDOM_GUESSES, 32), dtype=np.float32)
