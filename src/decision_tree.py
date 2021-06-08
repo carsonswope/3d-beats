@@ -321,9 +321,9 @@ class DecisionTreeTrainer():
         # original distribution of classes as node counts
         self.node_counts[:] = 0
 
-        for ii in range(self.NUM_IMAGE_BLOCKS):
+        for img_block_idx in range(self.NUM_IMAGE_BLOCKS):
  
-            dataset.get_labels_block_cu(ii, self.current_image_block_labels)
+            dataset.get_labels_block_cu(img_block_idx, self.current_image_block_labels)
             self.current_image_block_labels_cpu = self.current_image_block_labels.get()
 
             un = np.unique(self.current_image_block_labels_cpu, return_counts=True)
@@ -334,7 +334,7 @@ class DecisionTreeTrainer():
             self.current_image_block_nodes_by_pixel_cpu.fill(-1)
             self.current_image_block_nodes_by_pixel_cpu[np.where(self.current_image_block_labels_cpu > 0)] = 0
             self.current_image_block_nodes_by_pixel.set(self.current_image_block_nodes_by_pixel_cpu)
-            self.nodes_by_pixel_compressed_blocks.write_block(ii, self.current_image_block_nodes_by_pixel)
+            self.nodes_by_pixel_compressed_blocks.write_block(img_block_idx, self.current_image_block_nodes_by_pixel)
 
         self.node_counts_cu.set(self.node_counts)
 
@@ -354,20 +354,10 @@ class DecisionTreeTrainer():
 
             self.best_gain_seen_per_node.fill(np.float32(-1.))
 
-            for ff in range(self.NUM_PROPOSAL_BLOCKS):
+            for proposal_block_idx in range(self.NUM_PROPOSAL_BLOCKS):
 
-                # print('  proposal block: ', ff)
-                
                 make_random_features(self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK, self.current_proposals_block_cpu)
                 self.current_proposals_block.set(self.current_proposals_block_cpu)
-                
-
-                # print('  generated..')
-
-                # current_level = 0, max_active_nodes_next_level = 2
-                #                 1                                4
-                #                 2                                8
-                #                 3                                16
 
                 # if at 0 level, there is (up to) 1 active node,  so next level could have 2 active nodes
                 # if at 1 level, there is (up to) 2 active nodes, so next level could have 4 active nodes
@@ -376,30 +366,20 @@ class DecisionTreeTrainer():
                 if max_active_nodes_next_level > self.MAX_NEXT_NODES_TO_COUNT_PER_BLOCK:
                     assert max_active_nodes_next_level % self.MAX_NEXT_NODES_TO_COUNT_PER_BLOCK == 0 # should just be powers of 2..
                     num_node_blocks = max_active_nodes_next_level // self.MAX_NEXT_NODES_TO_COUNT_PER_BLOCK
-                    # print('num node blocks: ', num_node_blocks)
                     node_blocks = [(i * self.MAX_NEXT_NODES_TO_COUNT_PER_BLOCK, (i+1) * self.MAX_NEXT_NODES_TO_COUNT_PER_BLOCK) for i in range(num_node_blocks)]
-                    # print(node_blocks)
                 else:
                     node_blocks = [(0, max_active_nodes_next_level)]
-                    # print('1 node block')
-                    # print(node_blocks)
 
                 for node_block_start, node_block_end in node_blocks:
 
                     self.current_next_node_counts_by_feature_cu_block.fill(np.uint64(0))
 
-                    # print('filled..')
+                    for img_block_idx in range(self.NUM_IMAGE_BLOCKS):
 
-                    for ii in range(self.NUM_IMAGE_BLOCKS):
+                        dataset.get_labels_block_cu(img_block_idx, self.current_image_block_labels)
+                        dataset.get_depth_block_cu(img_block_idx, self.current_image_block_depth)
 
-                        # print('  image block: ', ii)
-
-                        dataset.get_labels_block_cu(ii, self.current_image_block_labels)
-                        dataset.get_depth_block_cu(ii, self.current_image_block_depth)
-
-                        self.nodes_by_pixel_compressed_blocks.get_block(ii, self.current_image_block_nodes_by_pixel)
-
-                        # cu.Context.synchronize()
+                        self.nodes_by_pixel_compressed_blocks.get_block(img_block_idx, self.current_image_block_nodes_by_pixel)
 
                         bdx = MAX_THREADS_PER_BLOCK // self.NUM_PROPOSALS_PER_PROPOSAL_BLOCK
                         img_block_shape = self.current_image_block_depth.shape
@@ -449,8 +429,6 @@ class DecisionTreeTrainer():
             self.next_num_active_nodes_cu.fill(np.int32(0))
             self.next_active_nodes_cu.fill(np.int32(0))
 
-            # print('  gen active nodes next level')
-
             self.get_active_nodes_next_level(
                 np.int32(current_level),
                 np.int32(self.MAX_TREE_DEPTH),
@@ -467,11 +445,10 @@ class DecisionTreeTrainer():
 
             self.node_counts_cu.set(self.next_node_counts_cu)
 
-            for ii in range(self.NUM_IMAGE_BLOCKS):
+            for img_block_idx in range(self.NUM_IMAGE_BLOCKS):
 
-                dataset.get_depth_block_cu(ii, self.current_image_block_depth)
-
-                self.nodes_by_pixel_compressed_blocks.get_block(ii, self.current_image_block_nodes_by_pixel)
+                dataset.get_depth_block_cu(img_block_idx, self.current_image_block_depth)
+                self.nodes_by_pixel_compressed_blocks.get_block(img_block_idx, self.current_image_block_nodes_by_pixel)
 
                 copy_grid_dim = (int((self.NUM_IMAGES_PER_IMAGE_BLOCK * dataset.img_dims[0] * dataset.img_dims[1]) // MAX_THREADS_PER_BLOCK) + 1, 1, 1)
                 copy_block_dim = (MAX_THREADS_PER_BLOCK, 1, 1)
@@ -488,8 +465,7 @@ class DecisionTreeTrainer():
                     tree.tree_out_cu,
                     grid = copy_grid_dim, block=copy_block_dim)
 
-                self.nodes_by_pixel_compressed_blocks.write_block(ii, self.current_image_block_nodes_by_pixel)
-
+                self.nodes_by_pixel_compressed_blocks.write_block(img_block_idx, self.current_image_block_nodes_by_pixel)
 
             self.active_nodes_cu.set(self.next_active_nodes_cu)
 

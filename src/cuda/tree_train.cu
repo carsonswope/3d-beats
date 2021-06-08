@@ -61,9 +61,6 @@ void evaluate_random_features(
     assert(next_node < MAX_LEAF_NODES);
     uint64* next_nodes_counts_ptr = next_nodes_counts.get_ptr({j, next_node - NEXT_NODE_ELIGIBLE_MIN, label});
     atomicAdd(next_nodes_counts_ptr, (uint64)1);
-    // }
-
-
 }}
 
 __device__ uint64 node_counts_sum(uint64* p, const int num_classes) {

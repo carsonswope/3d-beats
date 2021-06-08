@@ -1,36 +1,7 @@
-"""
-how to generate properly labeled dataset given:
- a. realsense .bag file of painted hand
- b. # of expected colors on hand
-
-1. for first frame:
- - find plane
-
-2. for each frame:
- a. filter out depth pixels given plane
- b. align color frame to depth frame
- c. remove any depth pixel w/o corresponding color pixel
- d. convert color frame to HSV with S and V both 255
-
-3. for all frames ? 1st frame ? each frame ?
- a. run e.m algorithm on colors to determine which hues are the true classes
-   i. pick random hue
-   ii. categorize pixels according to hue
-   iii. pick new hue for each group
-   iiii. goto ii until stabilization
-
-4. for each frame:
-  a. convert color frame to 'compressed' version, generate labels image
-
-5. profit
-"""
-
-IN_PATH = './datagen/sets/live1/t13.bag'
-OUT_PATH = './datagen/sets/live1/data9/'
-
 import pyrealsense2 as rs
 import numpy as np
 import cv2
+from PIL import Image
 
 import pycuda.driver as cu
 import pycuda.autoinit
@@ -40,318 +11,326 @@ from decision_tree import *
 from cuda.points_ops import *
 np.set_printoptions(suppress=True)
 
-from PIL import Image
 
 from util import MAX_UINT16
 
-points_ops = PointsOps()
+import argparse
 
-pipeline = rs.pipeline()
-config = rs.config()
-config.enable_device_from_file(IN_PATH, repeat_playback=False)
+def main():
 
-config.enable_stream(rs.stream.depth, rs.format.z16)
-config.enable_stream(rs.stream.color, rs.format.rgb8)
+    parser = argparse.ArgumentParser(description='Train a classifier RDF for depth images')
+    parser.add_argument('-i', '--bag_in', nargs='?', required=True, type=str, help='Path to realsense .bag input file')
+    parser.add_argument('-o', '--out', nargs='?', required=True, type=str, help='Directory to save formatted date')
+    parser.add_argument('--colors', nargs='?', required=True, type=int, help='Num colors to look for in input image, to convert to labels')
+    parser.add_argument('--colors_num_restarts', nargs='?', required=False, type=int, help='Num times to run EM algorithm in search of best fit for colors/labels')
+    parser.add_argument('--colors_num_iterations', nargs='?', required=False, type=int, help='Num rounds to run EM iteration per full pass of algorithm in search of best fit for colors/labels')
+    parser.add_argument('--plane_num_iterations', nargs='?', required=False, type=int, help='Num random planes to propose looking for best fit')
+    parser.add_argument('--plane_z_threshold', nargs='?', required=True, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
+    parser.add_argument('--max_images', nargs='?', required=False, type=int, help='Maximum number of images to process')
+    parser.add_argument('--frames_timestamp_max_diff', nargs='?', required=False, type=float, help='Only process a frems if the depth & color frame have timestamps that are different by less than X (ms?)')
+    args = parser.parse_args()
 
-pf = pipeline.start(config)
-pf.get_device().as_playback().set_real_time(False)
+    IN_PATH = args.bag_in
+    OUT_PATH = args.out
 
-# Create opencv window to render image in
-cv2.namedWindow("Depth Stream", cv2.WINDOW_AUTOSIZE)
+    COLOR_EM_NUM_COLORS = args.colors
+    COLOR_EM_NUM_TRIES = args.colors_num_restarts or 8
+    COLOR_EM_ITERATIONS = args.colors_num_iterations or 32
 
-depth_intr = pipeline.get_active_profile().get_stream(rs.stream.depth).as_video_stream_profile().get_intrinsics()
+    PLANE_RANSAC_NUM_CANDIDATES = args.plane_num_iterations or 25000
+    PLANE_Z_THRESHOLD = args.plane_z_threshold
 
-DIM_X = depth_intr.width
-DIM_Y = depth_intr.height
-FOCAL = np.float32(depth_intr.fx) # should be same as fy..
-PP = np.array([depth_intr.ppx, depth_intr.ppy], dtype=np.float32)
+    MAX_IMAGES = args.max_images or np.Infinity
 
-# Create colorizer object
-colorizer = rs.colorizer()
-align = rs.align(rs.stream.depth)
+    FRAMES_TIMESTAMP_MAX_DIFF = args.frames_timestamp_max_diff or 6.
 
-NUM_RANDOM_GUESSES = 25000
-candidate_planes_cu = cu_array.GPUArray((NUM_RANDOM_GUESSES, 4, 4), dtype=np.float32)
-num_inliers_cu = cu_array.GPUArray((NUM_RANDOM_GUESSES), dtype=np.int32)
+    points_ops = PointsOps()
 
-PLANE_Z_OUTLIER_THRESHOLD = 55.
+    pipeline = rs.pipeline()
+    config = rs.config()
+    config.enable_device_from_file(IN_PATH, repeat_playback=False)
 
-NUM_COLORS = 7
+    config.enable_stream(rs.stream.depth, rs.format.z16)
+    config.enable_stream(rs.stream.color, rs.format.rgb8)
 
-rand_generator = cu_rand.XORWOWRandomNumberGenerator(seed_getter=cu_rand.seed_getter_unique)
-rand_cu = cu_array.GPUArray((NUM_RANDOM_GUESSES, 32), dtype=np.float32)
+    pf = pipeline.start(config)
+    pf.get_device().as_playback().set_real_time(False)
 
-pts_cu = cu_array.GPUArray((DIM_Y, DIM_X, 4), dtype=np.float32)
+    # Create opencv window to render image in
+    cv2.namedWindow("Depth Stream", cv2.WINDOW_AUTOSIZE)
 
-depth_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
+    depth_intr = pipeline.get_active_profile().get_stream(rs.stream.depth).as_video_stream_profile().get_intrinsics()
 
-color_image_cu = cu_array.GPUArray((DIM_Y, DIM_X, 3), dtype=np.uint8)
+    DIM_X = depth_intr.width
+    DIM_Y = depth_intr.height
+    FOCAL = np.float32(depth_intr.fx) # should be same as fy..
+    PP = np.array([depth_intr.ppx, depth_intr.ppy], dtype=np.float32)
 
-color_mapping_cu = cu_array.GPUArray((NUM_COLORS, 3), dtype=np.uint8)
+    align = rs.align(rs.stream.depth)
 
-calibrated_plane = None
+    candidate_planes_cu = cu_array.GPUArray((PLANE_RANSAC_NUM_CANDIDATES, 4, 4), dtype=np.float32)
+    num_inliers_cu = cu_array.GPUArray(PLANE_RANSAC_NUM_CANDIDATES, dtype=np.int32)
 
-def make_calibrated_plane():
+    rand_generator = cu_rand.XORWOWRandomNumberGenerator(seed_getter=cu_rand.seed_getter_unique)
+    rand_cu = cu_array.GPUArray((PLANE_RANSAC_NUM_CANDIDATES, 32), dtype=np.float32)
 
-    rand_generator.fill_uniform(rand_cu)
-    candidate_planes_cu.fill(np.float(0))
+    pts_cu = cu_array.GPUArray((DIM_Y, DIM_X, 4), dtype=np.float32)
 
-    points_ops.make_plane_candidates(
-        np.int32(NUM_RANDOM_GUESSES),
-        np.int32(DIM_X),
-        np.int32(DIM_Y),
-        rand_cu,
-        pts_cu,
-        candidate_planes_cu,
-        grid=((NUM_RANDOM_GUESSES // 32) + 1, 1, 1),
-        block=(32, 1, 1))
+    depth_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
 
-    num_inliers_cu.fill(np.int32(0))
+    color_image_cu = cu_array.GPUArray((DIM_Y, DIM_X, 3), dtype=np.uint8)
+
+    color_mapping_cu = cu_array.GPUArray((COLOR_EM_NUM_COLORS, 3), dtype=np.uint8)
+
+    calibrated_plane = None
+
+    def make_calibrated_plane():
+
+        rand_generator.fill_uniform(rand_cu)
+        candidate_planes_cu.fill(np.float(0))
+
+        points_ops.make_plane_candidates(
+            np.int32(PLANE_RANSAC_NUM_CANDIDATES),
+            np.int32(DIM_X),
+            np.int32(DIM_Y),
+            rand_cu,
+            pts_cu,
+            candidate_planes_cu,
+            grid=((PLANE_RANSAC_NUM_CANDIDATES // 32) + 1, 1, 1),
+            block=(32, 1, 1))
+
+        num_inliers_cu.fill(np.int32(0))
+                
+        # every point..
+        grid_dim = (((DIM_X * DIM_Y) // 1024) + 1, 1, 1)
+        block_dim = (1024, 1, 1)
+
+        points_ops.find_plane_ransac(
+            np.int32(PLANE_RANSAC_NUM_CANDIDATES),
+            np.float32(PLANE_Z_THRESHOLD),
+            np.int32(DIM_X * DIM_Y),
+            pts_cu,
+            candidate_planes_cu,
+            num_inliers_cu,
+            grid=grid_dim,
+            block=block_dim)
+
+        num_inliers = num_inliers_cu.get()
+        best_inlier_idx = np.argmax(num_inliers)
+
+        calibrated_plane = np.zeros((4, 4), dtype=np.float32)
+        cu.memcpy_dtoh(calibrated_plane, candidate_planes_cu[best_inlier_idx].ptr)
+
+        return calibrated_plane
+
+
+    color_mapping = None
+
+    def make_color_mapping():
+
+        print('making color mapping... ')
+
+        best_colors_diffs = np.Infinity
+        best_colors = np.zeros((COLOR_EM_NUM_COLORS, 3), dtype=np.uint8)
+
+        colors_cu = cu_array.GPUArray((COLOR_EM_NUM_COLORS, 3), dtype=np.uint8)
+        pixel_counts_per_group_cu = cu_array.GPUArray((COLOR_EM_NUM_COLORS, 5), dtype=np.uint64)
+
+        for _1 in range(COLOR_EM_NUM_TRIES):
+
+            colors = np.random.uniform(0, 255, (COLOR_EM_NUM_COLORS, 3)).astype(np.uint8)
+
+            for _2 in range(COLOR_EM_ITERATIONS):
+
+
+                colors_cu.set(colors)
+
+                pixel_counts_per_group_cu.fill(np.uint64(0))
+
+                grid_dim3 = ((DIM_X // 32) + 1, (DIM_Y // 32) + 1, 1)
+                block_dim3 = (32,32,1)
+                
+                points_ops.split_pixels_by_nearest_color(
+                    np.int32(DIM_X),
+                    np.int32(DIM_Y),
+                    np.int32(COLOR_EM_NUM_COLORS),
+                    colors_cu,
+                    color_image_cu,
+                    pixel_counts_per_group_cu,
+                    grid=grid_dim3,
+                    block=block_dim3)
+
+                pixel_counts_per_group = pixel_counts_per_group_cu.get()
+
+                grouping_cost = np.sum(pixel_counts_per_group[:,4].view(np.float64))
+
+                colors = (pixel_counts_per_group[:,1:4].T / pixel_counts_per_group[:,0]).T.astype(np.uint8)
             
-    # every point..
-    grid_dim = (((DIM_X * DIM_Y) // 1024) + 1, 1, 1)
-    block_dim = (1024, 1, 1)
-
-    points_ops.find_plane_ransac(
-        np.int32(NUM_RANDOM_GUESSES),
-        np.float32(PLANE_Z_OUTLIER_THRESHOLD),
-        np.int32(DIM_X * DIM_Y),
-        pts_cu,
-        candidate_planes_cu,
-        num_inliers_cu,
-        grid=grid_dim,
-        block=block_dim)
-
-    num_inliers = num_inliers_cu.get()
-    best_inlier_idx = np.argmax(num_inliers)
-
-    calibrated_plane = np.zeros((4, 4), dtype=np.float32)
-    cu.memcpy_dtoh(calibrated_plane, candidate_planes_cu[best_inlier_idx].ptr)
-
-    return calibrated_plane
-
-
-color_mapping = None
-
-NUM_TESTS = 15
-NUM_ITERATIONS = 30
-
-def make_color_mapping():
-
-    print('making color mapping... ')
-
-    best_colors_diffs = np.Infinity
-    best_colors = np.zeros((NUM_COLORS, 3), dtype=np.uint8)
-
-    colors_cu = cu_array.GPUArray((NUM_COLORS, 3), dtype=np.uint8)
-    pixel_counts_per_group_cu = cu_array.GPUArray((NUM_COLORS, 5), dtype=np.uint64)
-
-    for _1 in range(NUM_TESTS):
-
-        colors = np.random.uniform(0, 255, (NUM_COLORS, 3)).astype(np.uint8)
-
-        for _2 in range(NUM_ITERATIONS):
-
-
-            colors_cu.set(colors)
-
-            pixel_counts_per_group_cu.fill(np.uint64(0))
-
-            grid_dim3 = ((DIM_X // 32) + 1, (DIM_Y // 32) + 1, 1)
-            block_dim3 = (32,32,1)
-            
-            points_ops.split_pixels_by_nearest_color(
-                np.int32(DIM_X),
-                np.int32(DIM_Y),
-                np.int32(NUM_COLORS),
-                colors_cu,
-                color_image_cu,
-                pixel_counts_per_group_cu,
-                grid=grid_dim3,
-                block=block_dim3)
-
-            pixel_counts_per_group = pixel_counts_per_group_cu.get()
-
-            grouping_cost = np.sum(pixel_counts_per_group[:,4].view(np.float64))
-
-            colors = (pixel_counts_per_group[:,1:4].T / pixel_counts_per_group[:,0]).T.astype(np.uint8)
+            if grouping_cost < best_colors_diffs:
+                best_colors_diffs = grouping_cost
+                best_colors = np.copy(colors)
         
-        if grouping_cost < best_colors_diffs:
-            best_colors_diffs = grouping_cost
-            best_colors = np.copy(colors)
-    
-    del colors_cu
-    del pixel_counts_per_group_cu
+        del colors_cu
+        del pixel_counts_per_group_cu
 
-    print('made.')
+        print('made.')
 
-    return best_colors
+        return best_colors
 
-labels_image = np.zeros((DIM_Y, DIM_X), dtype=np.uint16)
+    labels_image = np.zeros((DIM_Y, DIM_X), dtype=np.uint16)
 
-color_image_rgba = np.zeros((DIM_Y, DIM_X, 4),dtype=np.uint8)
+    color_image_rgba = np.zeros((DIM_Y, DIM_X, 4),dtype=np.uint8)
 
-# Streaming loop
-frame_count = 0
-while True:
-    # Get frameset of depth
-    try:
-        # are there double frames
-        frames = pipeline.wait_for_frames(1000)
+    # Streaming loop
+    frame_count = 0
+    while frame_count < MAX_IMAGES:
+        # Get frameset of depth
+        try:
+            frames = pipeline.wait_for_frames(1000)
+            df_time = frames.get_depth_frame().get_timestamp()
+            cf_time = frames.get_color_frame().get_timestamp()
+            # only process frame pairs whose timestamps overlap reasonably well
+            if np.abs(df_time - cf_time) > FRAMES_TIMESTAMP_MAX_DIFF:
+                continue
+        except:
+            print('concluded !')
+            break
 
-        df_time = frames.get_depth_frame().get_timestamp()
-        cf_time = frames.get_color_frame().get_timestamp()
-        if np.abs(df_time - cf_time) > 6.:
-            # print('-skip-')
-            continue
-        # else:
-            # print('not skip!!')
-    except:
-        print('concluded !')
-        break
+        frame_count += 1
 
-    frame_count += 1
+        # Get depth frame
+        depth_frame = frames.get_depth_frame()
 
-    # Get depth frame
-    depth_frame = frames.get_depth_frame()
+        depth_np = np.asanyarray(depth_frame.data)
+        depth_cu.set(depth_np)
 
-    
+        grid_dim = (1, (DIM_X // 32) + 1, (DIM_Y // 32) + 1)
+        block_dim = (1,32,32)
 
-    # print('df s: ', depth_frame.get_timestamp())
-    # print('cl ts: ', frames.get_color_frame().get_timestamp())
+        # convert depth image to points
+        points_ops.deproject_points(
+            np.array([1, DIM_X, DIM_Y, -1], dtype=np.int32),
+            PP,
+            FOCAL,
+            depth_cu,
+            pts_cu,
+            grid=grid_dim,
+            block=block_dim)
 
-    depth_np = np.asanyarray(depth_frame.data)
-    depth_cu.set(depth_np)
+        if calibrated_plane is None:
+            calibrated_plane = make_calibrated_plane()
+        
+        # every point..
+        grid_dim2 = (((DIM_X * DIM_Y) // 1024) + 1, 1, 1)
+        block_dim2 = (1024, 1, 1)
 
-    grid_dim = (1, (DIM_X // 32) + 1, (DIM_Y // 32) + 1)
-    block_dim = (1,32,32)
+        points_ops.transform_points(
+            np.int32(DIM_X * DIM_Y),
+            pts_cu,
+            calibrated_plane,
+            grid=grid_dim2,
+            block=block_dim2)
+        
+        points_ops.filter_points_by_plane(
+            np.int32(DIM_X * DIM_Y),
+            np.float32(PLANE_Z_THRESHOLD),
+            pts_cu,
+            grid=grid_dim2,
+            block=block_dim2)
 
-    # convert depth image to points
-    points_ops.deproject_points(
-        np.array([1, DIM_X, DIM_Y, -1], dtype=np.int32),
-        PP,
-        FOCAL,
-        depth_cu,
-        pts_cu,
-        grid=grid_dim,
-        block=block_dim)
+        points_ops.transform_points(
+            np.int32(DIM_X * DIM_Y),
+            pts_cu,
+            np.linalg.inv(calibrated_plane),
+            grid=grid_dim2,
+            block=block_dim2)
+        
+        depth_cu.fill(np.uint16(0))
 
-    if calibrated_plane is None:
-        calibrated_plane = make_calibrated_plane()
-    
-    # every point..
-    grid_dim2 = (((DIM_X * DIM_Y) // 1024) + 1, 1, 1)
-    block_dim2 = (1024, 1, 1)
+        points_ops.depths_from_points(
+            np.array([1, DIM_X, DIM_Y, -1], dtype=np.int32),
+            depth_cu,
+            pts_cu,
+            grid=grid_dim,
+            block=block_dim)
 
-    points_ops.transform_points(
-        np.int32(DIM_X * DIM_Y),
-        pts_cu,
-        calibrated_plane,
-        grid=grid_dim2,
-        block=block_dim2)
-    
-    points_ops.filter_points_by_plane(
-        np.int32(DIM_X * DIM_Y),
-        np.float32(PLANE_Z_OUTLIER_THRESHOLD),
-        pts_cu,
-        grid=grid_dim2,
-        block=block_dim2)
+        # copy back to cpu-side depth frame memory, so align processing block can run
+        depth_cu.get(depth_np)
 
-    points_ops.transform_points(
-        np.int32(DIM_X * DIM_Y),
-        pts_cu,
-        np.linalg.inv(calibrated_plane),
-        grid=grid_dim2,
-        block=block_dim2)
-    
-    depth_cu.fill(np.uint16(0))
+        frames_aligned = align.process(frames)
+        color_frame = frames_aligned.get_color_frame()
 
-    points_ops.depths_from_points(
-        np.array([1, DIM_X, DIM_Y, -1], dtype=np.int32),
-        depth_cu,
-        pts_cu,
-        grid=grid_dim,
-        block=block_dim)
+        color_image = np.asanyarray(color_frame.get_data())
+        color_image_cu.set(color_image)
 
-    # copy back to cpu-side depth frame memory, so align processing block can run
-    depth_cu.get(depth_np)
+        if color_mapping is None:
+            color_mapping = make_color_mapping()
+            color_mapping_cu.set(color_mapping)
 
-    frames_aligned = align.process(frames)
-    color_frame = frames_aligned.get_color_frame()
+        grid_dim3 = ((DIM_X // 32) + 1, (DIM_Y // 32) + 1, 1)
+        block_dim3 = (32,32,1)
 
-    color_image = np.asanyarray(color_frame.get_data())
-    
-    # color_image = cv2.cvtColor(color_image, cv2.COLOR_RGB2HLS)
-    # color_image[color_image[:,:,1] > 127,1] = 127
-    # color_image
-    # color_image[color_image[:,:,2] ]
-    # color_image[]
-    # color_image_active_pixels = np.where(np.any(color_image > 0, axis=2))
-    # color_image[color_image_active_pixels[0], color_image_active_pixels[1] ,1] = 127
-    # color_image[color_image_active_pixels[0], color_image_active_pixels[1] ,2] = 255
-    # color_image = cv2.cvtColor(color_image, cv2.COLOR_HLS2RGB)
-    
+        points_ops.apply_point_mapping(
+            np.int32(DIM_X),
+            np.int32(DIM_Y),
+            np.int32(COLOR_EM_NUM_COLORS),
+            color_mapping_cu,
+            color_image_cu,
+            grid=grid_dim3,
+            block=block_dim3)
 
-    color_image_cu.set(color_image)
+        # render raw labels image from color image (1..n)
+        color_image_cu.get(color_image)
+        labels_image[:,:] = 0
+        for xx in range(COLOR_EM_NUM_COLORS):
+            labels_image[np.where(np.all(color_image == color_mapping[xx], axis=2))] = xx + 1 # group 0 is null group, starts at 1
+        Image.fromarray(labels_image).save(f'{OUT_PATH}/{str(frame_count - 1).zfill(8)}_labels.png')
 
-    if color_mapping is None:
-        color_mapping = make_color_mapping()
-        color_mapping_cu.set(color_mapping)
+        # debug rendering of labels image
+        color_image_rgba[:,:,3] = 0
+        color_image_rgba[:,:,0:3] = color_image
+        color_image_rgba[np.any(color_image > 0, axis=2),3] = 255
+        Image.fromarray(color_image_rgba).save(f'{OUT_PATH}/{str(frame_count - 1).zfill(8)}_labels_rgba.png')
 
-    grid_dim3 = ((DIM_X // 32) + 1, (DIM_Y // 32) + 1, 1)
-    block_dim3 = (32,32,1)
+        # render raw depth image
+        depth_np[depth_np == 0] = MAX_UINT16
+        Image.fromarray(depth_np).save(f'{OUT_PATH}/{str(frame_count - 1).zfill(8)}_depth.png')
 
-    points_ops.apply_point_mapping(
-        np.int32(DIM_X),
-        np.int32(DIM_Y),
-        np.int32(NUM_COLORS),
-        color_mapping_cu,
-        color_image_cu,
-        grid=grid_dim3,
-        block=block_dim3)
+        # debug rendering of
+        depth_rgba_np = np.zeros((DIM_Y, DIM_X, 4), dtype=np.uint8)
+        depth_rgba_np[depth_np == MAX_UINT16 ] = np.array([167, 195, 162, 255], dtype=np.uint8)
+        active_coords = np.where(depth_np < MAX_UINT16)
+        max_depth = np.max(depth_np[depth_np < MAX_UINT16])
+        min_depth = np.min(depth_np[depth_np < MAX_UINT16])
+        norm_depths = (255. * (1. - (depth_np[depth_np < MAX_UINT16] - (min_depth * 1.)) / (max_depth - min_depth))).astype(np.uint8)
+        depth_rgba_np[active_coords[0], active_coords[1], 0] = norm_depths
+        depth_rgba_np[active_coords[0], active_coords[1], 1] = norm_depths
+        depth_rgba_np[active_coords[0], active_coords[1], 2] = norm_depths
+        depth_rgba_np[active_coords[0], active_coords[1], 3] = 255
+        Image.fromarray(depth_rgba_np).save(f'{OUT_PATH}/{str(frame_count - 1).zfill(8)}_depth_rgba.png')
 
-    
-    color_image_cu.get(color_image)
-    color_image_rgba[:,:,3] = 0
-    color_image_rgba[:,:,0:3] = color_image
-    # transparency...
-    color_image_rgba[np.any(color_image > 0, axis=2),3] = 255
-    
+        color_image = cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR)
 
-    # convert color image to
-    labels_image[:,:] = 0
-    for xx in range(NUM_COLORS):
-        labels_image[np.where(np.all(color_image == color_mapping[xx], axis=2))] = xx + 1 # group 0 is null group, starts at 1
+        # Render image in opencv window
+        cv2.imshow("Depth Stream", color_image)
+        key = cv2.waitKey(1)
+        # if pressed escape exit program
+        if key == 27:
+            cv2.destroyAllWindows()
+            break
 
-    depth_np[depth_np == 0] = MAX_UINT16
+    # write json config as entry point into model
+    obj= {}
+    obj['img_dims'] = [DIM_X, DIM_Y]
+    obj['num_images'] = frame_count
+    obj['id_to_color'] = {'0': [0, 0, 0, 0]}
+    for c_id in range(COLOR_EM_NUM_COLORS):
+        c = color_mapping[c_id]
+        obj['id_to_color'][str(c_id + 1)] = [int(c[0]), int(c[1]), int(c[2]), 255]
 
-    Image.fromarray(labels_image).save(f'{OUT_PATH}/{str(frame_count - 1).zfill(8)}_labels.png')
-    Image.fromarray(color_image_rgba).save(f'{OUT_PATH}/{str(frame_count - 1).zfill(8)}_colors.png')
-    Image.fromarray(depth_np).save(f'{OUT_PATH}/{str(frame_count - 1).zfill(8)}_depth.png')
+    cfg_json_file = open(f'{OUT_PATH}/config.json', 'w')
+    cfg_json_file.write(json.dumps(obj))
+    cfg_json_file.close()
 
-    color_image = cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR)
-
-    # Render image in opencv window
-    cv2.imshow("Depth Stream", color_image)
-    key = cv2.waitKey(1)
-    # if pressed escape exit program
-    if key == 27:
-        cv2.destroyAllWindows()
-        break
-
-# write json config at the end of it..
-obj= {}
-obj['img_dims'] = [DIM_X, DIM_Y]
-obj['num_images'] = frame_count
-obj['id_to_color'] = {'0': [0, 0, 0, 0]}
-for c_id in range(NUM_COLORS):
-    c = color_mapping[c_id]
-    obj['id_to_color'][str(c_id + 1)] = [int(c[0]), int(c[1]), int(c[2]), 255]
-
-cfg_json_file = open(f'{OUT_PATH}/config.json', 'w')
-cfg_json_file.write(json.dumps(obj))
-cfg_json_file.close()
-
-# print('hi')
-
-# DIMobprint('hi')
+if __name__ == '__main__':
+    main()
