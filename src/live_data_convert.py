@@ -18,7 +18,7 @@ import argparse
 
 def main():
 
-    parser = argparse.ArgumentParser(description='Train a classifier RDF for depth images')
+    parser = argparse.ArgumentParser(description='Convert a realsense .bag file into training data for RDF')
     parser.add_argument('-i', '--bag_in', nargs='?', required=True, type=str, help='Path to realsense .bag input file')
     parser.add_argument('-o', '--out', nargs='?', required=True, type=str, help='Directory to save formatted date')
     parser.add_argument('--colors', nargs='?', required=True, type=int, help='Num colors to look for in input image, to convert to labels')
@@ -43,6 +43,8 @@ def main():
     MAX_IMAGES = args.max_images or np.Infinity
 
     FRAMES_TIMESTAMP_MAX_DIFF = args.frames_timestamp_max_diff or 6.
+
+    FRAMES_PER_RECOMPUTE_PLANE = 20
 
     points_ops = PointsOps()
 
@@ -217,7 +219,7 @@ def main():
             grid=grid_dim,
             block=block_dim)
 
-        if calibrated_plane is None:
+        if calibrated_plane is None or frame_count % FRAMES_PER_RECOMPUTE_PLANE == 0:
             calibrated_plane = make_calibrated_plane()
         
         # every point..

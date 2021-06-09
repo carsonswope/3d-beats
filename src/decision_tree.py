@@ -50,6 +50,8 @@ class DecisionTreeDatasetConfig():
         for i,c in cfg['id_to_color'].items():
             self.id_to_color[int(i)] = np.array(c, dtype=np.uint8)
 
+        self.total_available_images = cfg['num_images']
+
         if num_images == 0:
             return
 
