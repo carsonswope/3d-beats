@@ -28,6 +28,9 @@ def main():
     parser.add_argument('--plane_z_threshold', nargs='?', required=True, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
     parser.add_argument('--max_images', nargs='?', required=False, type=int, help='Maximum number of images to process')
     parser.add_argument('--frames_timestamp_max_diff', nargs='?', required=False, type=float, help='Only process a frems if the depth & color frame have timestamps that are different by less than X (ms?)')
+    parser.add_argument('--mask_model', nargs='?', required=False, type=str, help='Path to model to run to get mask')
+    parser.add_argument('--mask_label', nargs='?', required=False, type=int, help='ID from given mask model to filter by')
+
     args = parser.parse_args()
 
     IN_PATH = args.bag_in
@@ -46,7 +49,20 @@ def main():
 
     FRAMES_PER_RECOMPUTE_PLANE = 20
 
+    MASK_MODEL_PATH = args.mask_model
+    MASK_LABEL = args.mask_label
+
+    if (MASK_MODEL_PATH and not MASK_LABEL) or (not MASK_MODEL_PATH and MASK_LABEL):
+        print('--mask_path and --mask_label are both required if using mask')
+        return
+
+    if MASK_MODEL_PATH:
+        mask_model = DecisionForest.load(MASK_MODEL_PATH)
+    else:
+        mask_model = None
+
     points_ops = PointsOps()
+    decision_tree_evaluator = DecisionTreeEvaluator()
 
     pipeline = rs.pipeline()
     config = rs.config()
@@ -79,6 +95,10 @@ def main():
     pts_cu = cu_array.GPUArray((DIM_Y, DIM_X, 4), dtype=np.float32)
 
     depth_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
+
+    if mask_model:
+        mask_labels = np.zeros((1, DIM_Y, DIM_X), dtype=np.uint16)
+        mask_labels_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
 
     color_image_cu = cu_array.GPUArray((DIM_Y, DIM_X, 3), dtype=np.uint8)
 
@@ -263,6 +283,24 @@ def main():
         color_frame = frames_aligned.get_color_frame()
 
         color_image = np.asanyarray(color_frame.get_data())
+        # color_image_cu.set(color_image)
+
+        # how you could crop if you wanted..
+        # should be an input option??
+        # color_image[:,750:] = np.array([0, 0, 0], dtype=np.uint8)
+
+        if mask_model:
+
+            depth_np[depth_np == 0] = MAX_UINT16
+            depth_cu.set(depth_np)
+
+            mask_labels_cu.fill(np.uint16(0))
+            decision_tree_evaluator.get_labels_forest(mask_model, depth_cu, mask_labels_cu)
+            mask_labels_cu.get(mask_labels)
+            color_image[mask_labels[0] != MASK_LABEL] = np.array([0, 0, 0], dtype=np.uint8)
+            depth_np[depth_np == MAX_UINT16] = 0
+            depth_cu.set(depth_np)
+
         color_image_cu.set(color_image)
 
         if color_mapping is None:
