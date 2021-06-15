@@ -9,6 +9,7 @@ The original hand model is downloaded from: https://www.youtube.com/watch?v=PW5d
 
 # TODOs:
 
+- auto-tuning of plane / z threshold. should be able to determine best z threshold automatically
 - random scaling/noise/etc. added to input data for more robustness
 - smoothing of generated input labels data so as to improve quality of training data
 - add thumb sections to multi-level RDF architecture

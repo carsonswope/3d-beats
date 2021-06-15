@@ -8,6 +8,8 @@ import pycuda.curandom as cu_rand
 
 from decision_tree import *
 from cuda.points_ops import *
+from calibrated_plane import *
+
 np.set_printoptions(suppress=True)
 
 import argparse
@@ -31,11 +33,12 @@ def main():
     NUM_RANDOM_GUESSES = args.plane_num_iterations or 25000
     PLANE_Z_OUTLIER_THRESHOLD = args.plane_z_threshold
 
+    calibrated_plane = CalibratedPlane(NUM_RANDOM_GUESSES, PLANE_Z_OUTLIER_THRESHOLD)
+
     print('loading forest')
     m0 = DecisionForest.load(args.model0)
     m1 = DecisionForest.load(args.model1)
     m2 = DecisionForest.load(args.model2)
-    # data_config = DecisionTreeDatasetConfig(DATASET_PATH)
 
     print('compiling CUDA kernels..')
     decision_tree_evaluator = DecisionTreeEvaluator()
@@ -61,9 +64,6 @@ def main():
         device.first_depth_sensor().set_option(rs.option.depth_units, 0.0001)
         config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 90)
 
-    candidate_planes_cu = cu_array.GPUArray((NUM_RANDOM_GUESSES, 4, 4), dtype=np.float32)
-    num_inliers_cu = cu_array.GPUArray((NUM_RANDOM_GUESSES), dtype=np.int32)
-
     profile = pipeline.start(config)
     if RS_BAG:
         profile.get_device().as_playback().set_real_time(False)
@@ -88,50 +88,6 @@ def main():
     labels_image2_cpu = labels_image2_cu.get()
 
     labels_image_cpu_rgba = np.zeros((DIM_Y, DIM_X, 4), dtype=np.uint8)
-
-    rand_generator = cu_rand.XORWOWRandomNumberGenerator(seed_getter=cu_rand.seed_getter_unique)
-    rand_cu = cu_array.GPUArray((NUM_RANDOM_GUESSES, 32), dtype=np.float32)
-
-    calibrated_plane = None
-
-    def make_calibrated_plane():
-
-        rand_generator.fill_uniform(rand_cu)
-        candidate_planes_cu.fill(np.float(0))
-
-        points_ops.make_plane_candidates(
-            np.int32(NUM_RANDOM_GUESSES),
-            np.int32(DIM_X),
-            np.int32(DIM_Y),
-            rand_cu,
-            pts_cu,
-            candidate_planes_cu,
-            grid=((NUM_RANDOM_GUESSES // 32) + 1, 1, 1),
-            block=(32, 1, 1))
-
-        num_inliers_cu.fill(np.int32(0))
-                
-        # every point..
-        grid_dim = (((DIM_X * DIM_Y) // 1024) + 1, 1, 1)
-        block_dim = (1024, 1, 1)
-
-        points_ops.find_plane_ransac(
-            np.int32(NUM_RANDOM_GUESSES),
-            np.float32(PLANE_Z_OUTLIER_THRESHOLD),
-            np.int32(DIM_X * DIM_Y),
-            pts_cu,
-            candidate_planes_cu,
-            num_inliers_cu,
-            grid=grid_dim,
-            block=block_dim)
-
-        num_inliers = num_inliers_cu.get()
-        best_inlier_idx = np.argmax(num_inliers)
-
-        calibrated_plane = np.zeros((4, 4), dtype=np.float32)
-        cu.memcpy_dtoh(calibrated_plane, candidate_planes_cu[best_inlier_idx].ptr)
-
-        return calibrated_plane
 
     try:
 
@@ -167,8 +123,8 @@ def main():
                 grid=grid_dim,
                 block=block_dim)
 
-            if calibrated_plane is None or frame_num % 45 == 0:
-                calibrated_plane = make_calibrated_plane()
+            if not calibrated_plane.is_set() or frame_num % 45 == 0:
+                calibrated_plane.make(pts_cu, (DIM_X, DIM_Y))
 
             # every point..
             grid_dim2 = (((DIM_X * DIM_Y) // 1024) + 1, 1, 1)
@@ -177,11 +133,11 @@ def main():
             points_ops.transform_points(
                 np.int32(DIM_X * DIM_Y),
                 pts_cu,
-                calibrated_plane,
+                calibrated_plane.get_mat(),
                 grid=grid_dim2,
                 block=block_dim2)
 
-            points_ops.filter_points_by_plane(
+            calibrated_plane.filter_points_by_plane(
                 np.int32(DIM_X * DIM_Y),
                 np.float32(PLANE_Z_OUTLIER_THRESHOLD),
                 pts_cu,
@@ -211,14 +167,14 @@ def main():
             labels_image2_cu.get(labels_image2_cpu)
 
             labels_image_cpu_rgba.fill(0)
-            # ARM
+            # ARM == 1
             labels_image_cpu_rgba[labels_image0_cpu[0] == 1] = np.array([68, 128, 137, 255], dtype=np.uint8)
-            # HAND
+            # HAND == 4
             labels_image_cpu_rgba[labels_image0_cpu[0] == 4] = np.array([214, 244, 40, 255], dtype=np.uint8)
-            # THUMB
+            # THUMB == 2
             labels_image_cpu_rgba[labels_image0_cpu[0] == 2] = np.array([174, 45, 244, 255], dtype=np.uint8)
-            # label 3 == FINGERS...
 
+            # label 3 == FINGERS...
             f_base_colors = np.array([
                 [[255, 0, 0, 255], [255, 150, 150, 255], [120, 0, 0, 255]],
                 [[0, 255, 0, 255], [150, 255, 150, 255], [0, 120, 0, 255]],
