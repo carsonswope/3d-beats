@@ -90,9 +90,10 @@ def main():
     # labels_image2_cpu = labels_image2_cu.get()
 
     labels_image_composite_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
-    labels_image_composite_cpu = labels_image_composite_cu.get()
+    # labels_image_composite_cpu = labels_image_composite_cu.get()
 
-    labels_image_cpu_rgba = np.zeros((DIM_Y, DIM_X, 4), dtype=np.uint8)
+    labels_image_rgba_cpu = np.zeros((DIM_Y, DIM_X, 4), dtype=np.uint8)
+    labels_image_rgba_cu = cu_array.to_gpu(labels_image_rgba_cpu)
 
     mean_shift = MeanShift()
 
@@ -172,6 +173,7 @@ def main():
         # pinky
         [255, 140, 5, 255], [255, 188, 104, 255], [168, 94, 0, 255]
     ], dtype=np.uint8)
+    labels_colors_cu = cu_array.to_gpu(labels_colors)
 
     try:
 
@@ -208,7 +210,12 @@ def main():
                 block=block_dim)
 
             if not calibrated_plane.is_set() or frame_num % 45 == 0:
-                calibrated_plane.make(pts_cu, (DIM_X, DIM_Y))
+                if calibrated_plane.is_set():
+                    # attempt to improve plane..
+                    calibrated_plane.make(pts_cu, (DIM_X, DIM_Y), calibrated_plane.get_mat())
+                else:
+                    # initialize plane..
+                    calibrated_plane.make(pts_cu, (DIM_X, DIM_Y))
 
             # every point..
             grid_dim2 = (((DIM_X * DIM_Y) // 1024) + 1, 1, 1)
@@ -236,15 +243,13 @@ def main():
                 block=block_dim2)
 
             labels_image0_cu.fill(MAX_UINT16)
-            decision_tree_evaluator.get_labels_forest(m0, depth_image_cu, labels_image0_cu)
-
             labels_image1_cu.fill(MAX_UINT16)
-            decision_tree_evaluator.get_labels_forest(m1, depth_image_cu, labels_image1_cu)
-
             labels_image2_cu.fill(MAX_UINT16)
-            decision_tree_evaluator.get_labels_forest(m2, depth_image_cu, labels_image2_cu)
-
             labels_image_composite_cu.fill(MAX_UINT16)
+
+            decision_tree_evaluator.get_labels_forest(m0, depth_image_cu, labels_image0_cu)
+            decision_tree_evaluator.get_labels_forest(m1, depth_image_cu, labels_image1_cu)
+            decision_tree_evaluator.get_labels_forest(m2, depth_image_cu, labels_image2_cu)
 
             mean_shift.make_composite_labels_image(
                 labels_images_ptrs_cu,
@@ -260,27 +265,34 @@ def main():
                 mean_shift_variances_cu)
 
             # generate RGB image for debugging!
-            labels_image_composite_cu.get(labels_image_composite_cpu)
-            labels_image_cpu_rgba.fill(0)
-            for l in range(NUM_COMPOSITE_CLASSES):
-                labels_image_cpu_rgba[labels_image_composite_cpu[0] == l + 1, :] = labels_colors[l]
+            labels_image_rgba_cu.fill(np.uint8(0))
+            points_ops.make_rgba_from_labels(
+                np.uint32(DIM_X),
+                np.uint32(DIM_Y),
+                np.uint32(NUM_COMPOSITE_CLASSES),
+                labels_image_composite_cu,
+                labels_colors_cu,
+                labels_image_rgba_cu,
+                grid = ((DIM_X // 32) + 1, (DIM_Y // 32) + 1, 1),
+                block = (32,32,1))
+
+            labels_image_rgba_cu.get(labels_image_rgba_cpu)
 
             for m in label_means:
                 if not math.isnan(m[0]):
                     my = int(m[1])
                     mx = int(m[0])
                     if my > 0 and my < DIM_Y - 1 and mx > 0 and mx < DIM_X - 1:
-                        labels_image_cpu_rgba[my, mx, :] = np.array([255, 255, 255, 255], dtype=np.uint8)
-                        labels_image_cpu_rgba[my+1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-                        labels_image_cpu_rgba[my-1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-                        labels_image_cpu_rgba[my, mx+1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-                        labels_image_cpu_rgba[my, mx-1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                        labels_image_rgba_cpu[my, mx, :] = np.array([255, 255, 255, 255], dtype=np.uint8)
+                        labels_image_rgba_cpu[my+1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                        labels_image_rgba_cpu[my-1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                        labels_image_rgba_cpu[my, mx+1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                        labels_image_rgba_cpu[my, mx-1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
 
-            labels_image_cpu_bgra = cv2.cvtColor(labels_image_cpu_rgba, cv2.COLOR_RGB2BGR)
+            # labels_image_cpu_bgra = cv2.cvtColor(labels_image_rgba_cpu, cv2.COLOR_RGB2BGR)
 
             cv2.namedWindow('RealSense', cv2.WINDOW_AUTOSIZE)
-            cv2.imshow('RealSense', labels_image_cpu_bgra)
-            
+            cv2.imshow('RealSense', labels_image_rgba_cpu)
             cv2.waitKey(1)
 
             frame_num += 1

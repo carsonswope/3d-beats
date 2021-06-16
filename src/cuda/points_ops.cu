@@ -182,3 +182,29 @@ void split_pixels_by_nearest_color(
         // color_image_pixel[j] = best_colors_ptr[j];
     // }
 }}
+
+
+extern "C" {__global__
+void make_rgba_from_labels(
+        int IMG_DIM_X,
+        int IMG_DIM_Y,
+        int NUM_COLORS,
+        uint16* _labels,
+        uint8* _colors,
+        uint8* _color_image) {
+    
+    const int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+    const int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+    if (x >= IMG_DIM_X || y >= IMG_DIM_Y) return;
+
+    Array2d<uint16> labels(_labels, {IMG_DIM_Y, IMG_DIM_X});
+    Array2d<uint8> colors(_colors, {NUM_COLORS, 4});
+    Array3d<uint8> color_image(_color_image, {IMG_DIM_Y, IMG_DIM_X, 4});
+    
+    const auto l = labels.get({y, x});
+    if (l == 0 || l == MAX_UINT16) return;
+
+    auto* color_img_ptr = color_image.get_ptr({y, x, 0});
+    auto* color_ptr = colors.get_ptr({l - 1, 0});
+    memcpy(color_img_ptr, color_ptr, sizeof(uint8) * 4); // should evaluate to just 4 bytes..
+}}

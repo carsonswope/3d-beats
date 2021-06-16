@@ -9,3 +9,4 @@ class PointsOps():
         self.setup_depth_image_for_forest = cu_mod.get_function('setup_depth_image_for_forest')
         self.apply_point_mapping = cu_mod.get_function('apply_point_mapping')
         self.split_pixels_by_nearest_color = cu_mod.get_function('split_pixels_by_nearest_color')
+        self.make_rgba_from_labels = cu_mod.get_function('make_rgba_from_labels')

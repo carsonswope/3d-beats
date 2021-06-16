@@ -1,3 +1,4 @@
+from numpy.core.fromnumeric import nonzero
 import pycuda.driver as cu
 import pycuda.curandom as cu_rand
 import pycuda.gpuarray as cu_array
@@ -31,7 +32,7 @@ class CalibratedPlane():
         assert(self.is_set())
         return self.plane
 
-    def make(self, pts_cu, img_dims):
+    def make(self, pts_cu, img_dims, start_mat = None):
 
         self.rand_generator.fill_uniform(self.rand_cu)
         self.candidate_planes_cu.fill(np.float(0))
@@ -48,6 +49,10 @@ class CalibratedPlane():
             self.candidate_planes_cu,
             grid=((self.num_random_guesses // 32) + 1, 1, 1),
             block=(32, 1, 1))
+        
+        # have to at least beat this original matrix for a candidate to be accepted
+        if start_mat is not None:
+            self.candidate_planes_cu[0,:,:].set(start_mat)
 
         self.num_inliers_cu.fill(np.int32(0))
                 
