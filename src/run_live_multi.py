@@ -81,26 +81,46 @@ def main():
     depth_image_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
 
     labels_image0_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
-    labels_image0_cpu = labels_image0_cu.get()
+    # labels_image0_cpu = labels_image0_cu.get()
 
     labels_image1_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
-    labels_image1_cpu = labels_image1_cu.get()
+    # labels_image1_cpu = labels_image1_cu.get()
 
     labels_image2_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
-    labels_image2_cpu = labels_image2_cu.get()
+    # labels_image2_cpu = labels_image2_cu.get()
 
     labels_image_composite_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
     labels_image_composite_cpu = labels_image_composite_cu.get()
 
     labels_image_cpu_rgba = np.zeros((DIM_Y, DIM_X, 4), dtype=np.uint8)
 
-    mode_shift = MeanShift()
+    mean_shift = MeanShift()
 
     labels_images_ptrs = cu.pagelocked_zeros((3,), dtype=np.int64)
     labels_images_ptrs[0] = labels_image0_cu.__cuda_array_interface__['data'][0]
-    labels_images_ptrs[1] = labels_image1_cu.__cuda_array_interface__['data'][0]
-    labels_images_ptrs[2] = labels_image2_cu.__cuda_array_interface__['data'][0]
+    labels_images_ptrs[1] = labels_image2_cu.__cuda_array_interface__['data'][0]
+    labels_images_ptrs[2] = labels_image1_cu.__cuda_array_interface__['data'][0]
     labels_images_ptrs_cu = cu_array.to_gpu(labels_images_ptrs)
+
+
+
+    mean_shift_variances = np.array([
+        100.,
+        40.,
+        60.,
+        50.,
+        50.,
+        50.,
+        50.,
+        50.,
+        50.,
+        50.,
+        50.,
+        50.,
+        50.,
+        50.,
+        50.], dtype=np.float32)
+    mean_shift_variances_cu = cu_array.to_gpu(mean_shift_variances)
 
     # encoded instructions for making composite labels image using all generated labels images
     # essentially a mini decision-tree
@@ -110,22 +130,25 @@ def main():
         [0, 2], # if label 2, ID 2
         [1, 4], # if label 3, look at next img. root of that tree @ IDX 4
         [0, 3], # if label 4, ID 3
-        # img 1 == 3 , img 2
-        [1, 7], # if label 1, keep looking
-        [1, 11], # if label 2, keep looking
-        [1, 15], # if label 3, keep looking
-        # img 1 == 3 , img 2 == 1, img 3
-        [0, 4], # if label 1, ID 4
-        [0, 5], # if label 2, ID 5
-        [0, 6], # if label 3, ID 6
-        [0, 7], # if label 4, ID 6
+        # img 1 == 3 , img 2. keep looking, this determines which finger
+        [1, 8],
+        [1, 11],
+        [1, 14],
+        [1, 17],
+        # next 4 branches determines which knuckle!
+        # img 1 == 3, img 2 == 1, img 3
+        [0, 4],
+        [0, 5],
+        [0, 6],
         # img 1 == 3, img 2 == 2, img 3
+        [0, 7],
         [0, 8],
         [0, 9],
+        # img 1 == 3, img 2 == 3, img 3
         [0, 10],
         [0, 11],
-        # img 1 == 3, img 2 == 3, img 3
         [0, 12],
+        # img 1 == 3, img 2 == 4, img 3
         [0, 13],
         [0, 14],
         [0, 15],
@@ -134,12 +157,19 @@ def main():
     NUM_COMPOSITE_CLASSES = 15 # 1-15
 
     labels_colors = np.array([
+        # arm
         [68, 128, 137, 255],
-        [214, 244, 40, 255],
+        # thumb
         [174, 45, 244, 255],
+        # hand
+        [214, 244, 40, 255],
+        # index
         [255, 0, 0, 255], [255, 150, 150, 255], [120, 0, 0, 255],
+        # middle
         [0, 255, 0, 255], [150, 255, 150, 255], [0, 120, 0, 255],
+        # ring
         [0, 0, 255, 255], [170, 170, 255, 255], [0, 0, 120, 255],
+        # pinky
         [255, 140, 5, 255], [255, 188, 104, 255], [168, 94, 0, 255]
     ], dtype=np.uint8)
 
@@ -216,76 +246,35 @@ def main():
 
             labels_image_composite_cu.fill(MAX_UINT16)
 
-            mode_shift.make_composite_labels_image(
+            mean_shift.make_composite_labels_image(
                 labels_images_ptrs_cu,
                 DIM_X,
                 DIM_Y,
                 labels_conditions_cu,
                 labels_image_composite_cu)
 
-            labels_image_composite_cu.get(labels_image_composite_cpu)
+            label_means = mean_shift.run(
+                6,
+                labels_image_composite_cu,
+                NUM_COMPOSITE_CLASSES,
+                mean_shift_variances_cu)
 
+            # generate RGB image for debugging!
+            labels_image_composite_cu.get(labels_image_composite_cpu)
             labels_image_cpu_rgba.fill(0)
             for l in range(NUM_COMPOSITE_CLASSES):
-                # val = np.array([16, 16, 16, 0], dtype=np.uint8) * l
-                # val[3] = 255
                 labels_image_cpu_rgba[labels_image_composite_cpu[0] == l + 1, :] = labels_colors[l]
 
-            """
-
-            # final steps: these are slow.
-            # can be polished if/when necessary
-            labels_image0_cu.get(labels_image0_cpu)
-            labels_image1_cu.get(labels_image1_cpu)
-            labels_image2_cu.get(labels_image2_cpu)
-
-            means = []
-
-            labels_image_cpu_rgba.fill(0)
-
-            # ARM == 1
-            match = labels_image0_cpu[0] == 1
-            labels_image_cpu_rgba[match] = np.array([68, 128, 137, 255], dtype=np.uint8)
-            means.append(mode_shift.run(match, 50.))
-
-            # HAND == 4
-            match = labels_image0_cpu[0] == 4
-            labels_image_cpu_rgba[match] = np.array([214, 244, 40, 255], dtype=np.uint8)
-            means.append(mode_shift.run(match, 50.))
-
-            # THUMB == 2
-            match = labels_image0_cpu[0] == 2
-            labels_image_cpu_rgba[match] = np.array([174, 45, 244, 255], dtype=np.uint8)
-            means.append(mode_shift.run(match, 50.))
-
-            # label 3 == FINGERS...
-            f_base_colors = np.array([
-                [[255, 0, 0, 255], [255, 150, 150, 255], [120, 0, 0, 255]],
-                [[0, 255, 0, 255], [150, 255, 150, 255], [0, 120, 0, 255]],
-                [[0, 0, 255, 255], [170, 170, 255, 255], [0, 0, 120, 255]],
-                [[255, 140, 5, 255], [255, 188, 104, 255], [168, 94, 0, 255]],
-            ], dtype=np.uint8)
-
-
-            for f in range(4):
-                for j in range(3):
-                    match = np.logical_and(labels_image0_cpu[0] == 3, np.logical_and(labels_image1_cpu[0] == (j + 1), labels_image2_cpu[0] == (f + 1)))
-                    # color for debug..
-                    c = f_base_colors[f][j]
-                    labels_image_cpu_rgba[match] = c
-                    means.append(mode_shift.run(match, 20.))
-
-            for m in means:
+            for m in label_means:
                 if not math.isnan(m[0]):
-                    my = int(m[0])
-                    mx = int(m[1])
+                    my = int(m[1])
+                    mx = int(m[0])
                     if my > 0 and my < DIM_Y - 1 and mx > 0 and mx < DIM_X - 1:
-                        labels_image_cpu_rgba[int(m[0]), int(m[1]), :] = np.array([255, 255, 255, 255], dtype=np.uint8)
-                        labels_image_cpu_rgba[int(m[0] + 1), int(m[1]), :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-                        labels_image_cpu_rgba[int(m[0] - 1), int(m[1]), :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-                        labels_image_cpu_rgba[int(m[0]), int(m[1] + 1), :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-                        labels_image_cpu_rgba[int(m[0]), int(m[1] - 1), :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-            """
+                        labels_image_cpu_rgba[my, mx, :] = np.array([255, 255, 255, 255], dtype=np.uint8)
+                        labels_image_cpu_rgba[my+1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                        labels_image_cpu_rgba[my-1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                        labels_image_cpu_rgba[my, mx+1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                        labels_image_cpu_rgba[my, mx-1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
 
             labels_image_cpu_bgra = cv2.cvtColor(labels_image_cpu_rgba, cv2.COLOR_RGB2BGR)
 

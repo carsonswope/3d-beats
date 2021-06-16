@@ -1,5 +1,7 @@
+import pycuda.gpuarray as cu_array
+
 import numpy as np
-from numpy.core.shape_base import block
+
 import cuda.py_nvcc_utils as py_nvcc_utils
 
 
@@ -10,6 +12,14 @@ class MeanShift:
     def __init__(self):
         cu_mod = py_nvcc_utils.get_module('src/cuda/mean_shift.cu')
         self._make_composite_labels_image = cu_mod.get_function('make_composite_labels_image')
+        self._run = cu_mod.get_function('run')
+
+        self.means = None
+        # self.means_cpu = None
+
+        self.temp_sums = None
+        # self.temp_sums_cpu = None
+        # self.denom_sums = None
 
     def make_composite_labels_image(self, images, dim_x, dim_y, labels_decision_tree, composite_image):
 
@@ -27,6 +37,49 @@ class MeanShift:
             grid=grid_dim,
             block=block_dim)
     
+    def run(self, num_rounds, labels, num_labels, variances):
+
+        if not self.temp_sums or self.temp_sums.shape != (num_labels, 3):
+            self.means = cu_array.GPUArray((num_labels, 2), dtype=np.float64)
+            self.temp_sums = cu_array.GPUArray((num_labels, 3), dtype=np.float64)
+
+        dim_y, dim_x = labels.shape[1:]
+
+        # every point..
+        grid_dim = ((dim_x // 32) + 1, (dim_y // 32) + 1, 1)
+        block_dim = (32, 32, 1)
+
+        self.means.fill(np.float64(0.))
+
+
+
+        for i in range(num_rounds):
+            self.temp_sums.fill(np.float64(0.))
+
+            self._run(
+                labels,
+                np.int32(num_labels),
+                np.int32(dim_x),
+                np.int32(dim_y),
+                variances,
+                self.means,
+                np.int32(i),
+                self.temp_sums,
+                grid=grid_dim,
+                block=block_dim)
+            
+            temp_sums_cpu = self.temp_sums.get()
+            means_cpu = self.means.get()
+
+            mean_shift = temp_sums_cpu[:,0:2] / temp_sums_cpu[:,2].reshape((num_labels, 1))
+            means_cpu += mean_shift
+            self.means.set(means_cpu)
+        
+        means_cpu = self.means.get()
+
+        return means_cpu
+
+    """
     def run(self, match, variance):
 
         x = np.where(match)
@@ -46,3 +99,4 @@ class MeanShift:
             mean += m
 
         return mean
+    """
