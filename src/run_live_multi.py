@@ -1,6 +1,7 @@
 import pyrealsense2 as rs
 import numpy as np
 import cv2
+import math
 
 import pycuda.driver as cu
 import pycuda.autoinit
@@ -9,6 +10,7 @@ import pycuda.curandom as cu_rand
 from decision_tree import *
 from cuda.points_ops import *
 from calibrated_plane import *
+from cuda.mean_shift import *
 
 np.set_printoptions(suppress=True)
 
@@ -87,7 +89,59 @@ def main():
     labels_image2_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
     labels_image2_cpu = labels_image2_cu.get()
 
+    labels_image_composite_cu = cu_array.GPUArray((1, DIM_Y, DIM_X), dtype=np.uint16)
+    labels_image_composite_cpu = labels_image_composite_cu.get()
+
     labels_image_cpu_rgba = np.zeros((DIM_Y, DIM_X, 4), dtype=np.uint8)
+
+    mode_shift = MeanShift()
+
+    labels_images_ptrs = cu.pagelocked_zeros((3,), dtype=np.int64)
+    labels_images_ptrs[0] = labels_image0_cu.__cuda_array_interface__['data'][0]
+    labels_images_ptrs[1] = labels_image1_cu.__cuda_array_interface__['data'][0]
+    labels_images_ptrs[2] = labels_image2_cu.__cuda_array_interface__['data'][0]
+    labels_images_ptrs_cu = cu_array.to_gpu(labels_images_ptrs)
+
+    # encoded instructions for making composite labels image using all generated labels images
+    # essentially a mini decision-tree
+    labels_conditions = np.array([
+        # img 1
+        [0, 1], # if label 1, ID 1
+        [0, 2], # if label 2, ID 2
+        [1, 4], # if label 3, look at next img. root of that tree @ IDX 4
+        [0, 3], # if label 4, ID 3
+        # img 1 == 3 , img 2
+        [1, 7], # if label 1, keep looking
+        [1, 11], # if label 2, keep looking
+        [1, 15], # if label 3, keep looking
+        # img 1 == 3 , img 2 == 1, img 3
+        [0, 4], # if label 1, ID 4
+        [0, 5], # if label 2, ID 5
+        [0, 6], # if label 3, ID 6
+        [0, 7], # if label 4, ID 6
+        # img 1 == 3, img 2 == 2, img 3
+        [0, 8],
+        [0, 9],
+        [0, 10],
+        [0, 11],
+        # img 1 == 3, img 2 == 3, img 3
+        [0, 12],
+        [0, 13],
+        [0, 14],
+        [0, 15],
+    ], dtype=np.int32)
+    labels_conditions_cu = cu_array.to_gpu(labels_conditions)
+    NUM_COMPOSITE_CLASSES = 15 # 1-15
+
+    labels_colors = np.array([
+        [68, 128, 137, 255],
+        [214, 244, 40, 255],
+        [174, 45, 244, 255],
+        [255, 0, 0, 255], [255, 150, 150, 255], [120, 0, 0, 255],
+        [0, 255, 0, 255], [150, 255, 150, 255], [0, 120, 0, 255],
+        [0, 0, 255, 255], [170, 170, 255, 255], [0, 0, 120, 255],
+        [255, 140, 5, 255], [255, 188, 104, 255], [168, 94, 0, 255]
+    ], dtype=np.uint8)
 
     try:
 
@@ -151,14 +205,33 @@ def main():
                 grid=grid_dim2,
                 block=block_dim2)
 
-            labels_image0_cu.fill(np.uint16(65535))
+            labels_image0_cu.fill(MAX_UINT16)
             decision_tree_evaluator.get_labels_forest(m0, depth_image_cu, labels_image0_cu)
 
-            labels_image1_cu.fill(np.uint16(65535))
+            labels_image1_cu.fill(MAX_UINT16)
             decision_tree_evaluator.get_labels_forest(m1, depth_image_cu, labels_image1_cu)
 
-            labels_image2_cu.fill(np.uint16(65535))
+            labels_image2_cu.fill(MAX_UINT16)
             decision_tree_evaluator.get_labels_forest(m2, depth_image_cu, labels_image2_cu)
+
+            labels_image_composite_cu.fill(MAX_UINT16)
+
+            mode_shift.make_composite_labels_image(
+                labels_images_ptrs_cu,
+                DIM_X,
+                DIM_Y,
+                labels_conditions_cu,
+                labels_image_composite_cu)
+
+            labels_image_composite_cu.get(labels_image_composite_cpu)
+
+            labels_image_cpu_rgba.fill(0)
+            for l in range(NUM_COMPOSITE_CLASSES):
+                # val = np.array([16, 16, 16, 0], dtype=np.uint8) * l
+                # val[3] = 255
+                labels_image_cpu_rgba[labels_image_composite_cpu[0] == l + 1, :] = labels_colors[l]
+
+            """
 
             # final steps: these are slow.
             # can be polished if/when necessary
@@ -166,13 +239,24 @@ def main():
             labels_image1_cu.get(labels_image1_cpu)
             labels_image2_cu.get(labels_image2_cpu)
 
+            means = []
+
             labels_image_cpu_rgba.fill(0)
+
             # ARM == 1
-            labels_image_cpu_rgba[labels_image0_cpu[0] == 1] = np.array([68, 128, 137, 255], dtype=np.uint8)
+            match = labels_image0_cpu[0] == 1
+            labels_image_cpu_rgba[match] = np.array([68, 128, 137, 255], dtype=np.uint8)
+            means.append(mode_shift.run(match, 50.))
+
             # HAND == 4
-            labels_image_cpu_rgba[labels_image0_cpu[0] == 4] = np.array([214, 244, 40, 255], dtype=np.uint8)
+            match = labels_image0_cpu[0] == 4
+            labels_image_cpu_rgba[match] = np.array([214, 244, 40, 255], dtype=np.uint8)
+            means.append(mode_shift.run(match, 50.))
+
             # THUMB == 2
-            labels_image_cpu_rgba[labels_image0_cpu[0] == 2] = np.array([174, 45, 244, 255], dtype=np.uint8)
+            match = labels_image0_cpu[0] == 2
+            labels_image_cpu_rgba[match] = np.array([174, 45, 244, 255], dtype=np.uint8)
+            means.append(mode_shift.run(match, 50.))
 
             # label 3 == FINGERS...
             f_base_colors = np.array([
@@ -182,17 +266,26 @@ def main():
                 [[255, 140, 5, 255], [255, 188, 104, 255], [168, 94, 0, 255]],
             ], dtype=np.uint8)
 
-            # f_alts = [0, 150, 210]
 
             for f in range(4):
-                
                 for j in range(3):
+                    match = np.logical_and(labels_image0_cpu[0] == 3, np.logical_and(labels_image1_cpu[0] == (j + 1), labels_image2_cpu[0] == (f + 1)))
+                    # color for debug..
                     c = f_base_colors[f][j]
-                    # c[c == 0] = f_alts[j]
-                    labels_image_cpu_rgba[np.logical_and(labels_image0_cpu[0] == 3, np.logical_and(labels_image1_cpu[0] == (j + 1), labels_image2_cpu[0] == (f + 1)))] = c
+                    labels_image_cpu_rgba[match] = c
+                    means.append(mode_shift.run(match, 20.))
 
-            # labels_image_cpu_rgba[labels_image0_cpu[0] == 3] = np.array([0, 0, 255, 255], dtype=np.uint8)
-            # labels_image_cpu_rgba = data_config.convert_ids_to_colors(labels_image_cpu).reshape((480, 848, 4))
+            for m in means:
+                if not math.isnan(m[0]):
+                    my = int(m[0])
+                    mx = int(m[1])
+                    if my > 0 and my < DIM_Y - 1 and mx > 0 and mx < DIM_X - 1:
+                        labels_image_cpu_rgba[int(m[0]), int(m[1]), :] = np.array([255, 255, 255, 255], dtype=np.uint8)
+                        labels_image_cpu_rgba[int(m[0] + 1), int(m[1]), :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                        labels_image_cpu_rgba[int(m[0] - 1), int(m[1]), :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                        labels_image_cpu_rgba[int(m[0]), int(m[1] + 1), :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                        labels_image_cpu_rgba[int(m[0]), int(m[1] - 1), :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+            """
 
             labels_image_cpu_bgra = cv2.cvtColor(labels_image_cpu_rgba, cv2.COLOR_RGB2BGR)
 

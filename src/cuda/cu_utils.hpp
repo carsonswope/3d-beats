@@ -5,6 +5,8 @@
 #define GLM_SWIZZLE 
 #include <glm/glm.hpp>
 
+#define MAX_UINT16 65535
+
 typedef unsigned char uint8;
 typedef unsigned short uint16;
 typedef unsigned int uint32;
