@@ -11,3 +11,4 @@ datagen/sets
 models_out
 
 src/cuda/deps/glm
+imgui.ini
