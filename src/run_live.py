@@ -12,8 +12,8 @@ from decision_tree import *
 from cuda.points_ops import *
 from calibrated_plane import *
 
-from window import AppBase
-from buffer import GpuBuffer
+from engine.window import AppBase
+from engine.buffer import GpuBuffer
 
 
 
@@ -29,7 +29,7 @@ class RunLiveApp(AppBase):
         parser.add_argument('--plane_z_threshold', nargs='?', required=True, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
         args = parser.parse_args()
 
-        MODEL_OUT_NAME = args.model
+        MODEL_PATH = args.model
         DATASET_PATH = args.data
         RS_BAG = args.rs_bag
 
@@ -39,7 +39,7 @@ class RunLiveApp(AppBase):
         self.calibrated_plane = CalibratedPlane(NUM_RANDOM_GUESSES, self.PLANE_Z_OUTLIER_THRESHOLD)
 
         print('loading forest')
-        self.forest = DecisionForest.load(MODEL_OUT_NAME)
+        self.forest = DecisionForest.load(MODEL_PATH)
         self.data_config = DecisionTreeDatasetConfig(DATASET_PATH)
 
         print('compiling CUDA kernels..')
@@ -93,16 +93,22 @@ class RunLiveApp(AppBase):
 
         self.frame_num = 0
 
+    def splash(self):
+        imgui.text('loading...')
+
     def tick(self, t):
         
         # Wait for a coherent pair of frames: depth and color
         frames = self.pipeline.wait_for_frames()
         depth_frame = frames.get_depth_frame()
+
         if not depth_frame:
+            imgui.text('no depth frame!')
             return
 
         # let camera stabilize for a few frames
-        if self.frame_num < 15:
+        elif self.frame_num < 15:
+            imgui.text('loading... ...')
             self.frame_num += 1
             return
 
@@ -124,7 +130,7 @@ class RunLiveApp(AppBase):
             block=block_dim)
 
         if not self.calibrated_plane.is_set():
-            self.calibrated_plane.make(self.pts_gpu.cu(), (self.DIM_X, self.DIM_Y))
+            self.calibrated_plane.make(self.pts_gpu, (self.DIM_X, self.DIM_Y))
 
         # every point..
         grid_dim2 = (((self.DIM_X * self.DIM_Y) // 1024) + 1, 1, 1)
@@ -165,14 +171,11 @@ class RunLiveApp(AppBase):
         glBindTexture(GL_TEXTURE_2D, self.labels_image_rgba_tex)
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.DIM_X, self.DIM_Y, GL_RGBA, GL_UNSIGNED_BYTE, labels_image_cpu_rgba)
 
-
         self.frame_num += 1
 
-        imgui.begin("Stuff")
         imgui.text("f: " + str(self.frame_num))
+        # poor mans dpi for now..
         imgui.image(self.labels_image_rgba_tex, self.DIM_X * 2, self.DIM_Y * 2)
-        imgui.end()
-
 
 if __name__ == '__main__':
     a = RunLiveApp()

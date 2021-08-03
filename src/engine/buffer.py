@@ -1,6 +1,6 @@
 from OpenGL.GL import *
 import pycuda.gl
-import pycuda.driver as cu
+# import pycuda.driver as cu
 import pycuda.gpuarray as cu_array
 
 import numpy as np

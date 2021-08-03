@@ -32,7 +32,7 @@ class CalibratedPlane():
         assert(self.is_set())
         return self.plane
 
-    def make(self, pts_cu, img_dims, start_mat = None):
+    def make(self, pts_gpu, img_dims, start_mat = None):
 
         self.rand_generator.fill_uniform(self.rand_cu)
         self.candidate_planes_cu.fill(np.float(0))
@@ -45,7 +45,7 @@ class CalibratedPlane():
             np.int32(DIM_X),
             np.int32(DIM_Y),
             self.rand_cu,
-            pts_cu,
+            pts_gpu.cu(),
             self.candidate_planes_cu,
             grid=((self.num_random_guesses // 32) + 1, 1, 1),
             block=(32, 1, 1))
@@ -64,7 +64,7 @@ class CalibratedPlane():
             np.int32(self.num_random_guesses),
             np.float32(self.plane_z_outlier_threshold),
             np.int32(DIM_X * DIM_Y),
-            pts_cu,
+            pts_gpu.cu(),
             self.candidate_planes_cu,
             self.num_inliers_cu,
             grid=grid_dim,

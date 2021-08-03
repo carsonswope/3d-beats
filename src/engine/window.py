@@ -35,24 +35,45 @@ class AppBase():
         import pycuda.autoinit
         pycuda.gl.make_context(pycuda.autoinit.device)
 
+        # splash/loading screen..
+        glfw.poll_events()
 
-    def key_event(self, key, action, modifiers):
-        self.imgui.key_event(key, action, modifiers)
+        imgui.new_frame()
+        imgui.render()
+        self.imgui.render(imgui.get_draw_data())
+        imgui.end_frame()
+
+        glClearColor(0, 0, 0, 1)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+
+        imgui.new_frame()
+
+        self.splash()
+
+        self.imgui.process_inputs()
+        imgui.render()
+        self.imgui.render(imgui.get_draw_data())
+        imgui.end_frame()
+
+        glfw.swap_buffers(self.window)
+
+    # def key_event(self, key, action, modifiers):
+    #     self.imgui.key_event(key, action, modifiers)
         
-    def mouse_position_event(self, x, y, dx, dy):
-        self.imgui.mouse_position_event(x, y, dx, dy)
+    # def mouse_position_event(self, x, y, dx, dy):
+    #     self.imgui.mouse_position_event(x, y, dx, dy)
     
-    def mouse_drag_event(self, x, y, dx, dy):
-        self.imgui.mouse_drag_event(x, y, dx, dy)
+    # def mouse_drag_event(self, x, y, dx, dy):
+    #     self.imgui.mouse_drag_event(x, y, dx, dy)
 
-    def mouse_scroll_event(self, x_offset, y_offset):
-        self.imgui.mouse_scroll_event(x_offset, y_offset)
+    # def mouse_scroll_event(self, x_offset, y_offset):
+    #     self.imgui.mouse_scroll_event(x_offset, y_offset)
 
-    def mouse_press_event(self, x, y, button):
-        self.imgui.mouse_press_event(x, y, button)
+    # def mouse_press_event(self, x, y, button):
+    #     self.imgui.mouse_press_event(x, y, button)
 
-    def mouse_release_event(self, x: int, y: int, button: int):
-        self.imgui.mouse_release_event(x, y, button)
+    # def mouse_release_event(self, x: int, y: int, button: int):
+    #     self.imgui.mouse_release_event(x, y, button)
 
     def run(self):
 
