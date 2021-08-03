@@ -19,3 +19,7 @@ class StdCamera:
 
     def use(self):
         shaders.glUseProgram(self._program)
+
+    # def uniformMatrix4fv(self, name, )
+    def u_pos(self, name):
+        return glGetUniformLocation(self._program, name)

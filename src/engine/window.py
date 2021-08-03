@@ -97,4 +97,6 @@ class AppBase():
 
             glfw.swap_buffers(self.window)
 
+        pycuda.autoinit.context.pop()
+
         glfw.terminate()

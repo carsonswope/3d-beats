@@ -8,6 +8,8 @@ import argparse
 
 import glfw
 
+import glm
+
 # import pycuda.driver as cu
 # import pycuda.autoinit
 # import pycuda.curandom as cu_rand
@@ -24,8 +26,10 @@ from util import MAX_UINT16
 from engine.window import AppBase
 from engine.buffer import GpuBuffer
 from engine.texture import GpuTexture
+from engine.mesh import GpuMesh
 from engine.framebuffer import GpuFramebuffer
 from camera.std_camera import StdCamera
+
 
 class LiveDataConvert(AppBase):
     def __init__(self):
@@ -33,24 +37,24 @@ class LiveDataConvert(AppBase):
 
         self.depth_cam = StdCamera()
 
-        self.obj_idxes = GpuBuffer((3,), dtype=np.uint16)
-        self.obj_idxes.cu().set(np.array([0, 1, 2], dtype=np.uint16))
-        self.obj_vtxes = GpuBuffer((3, 4), dtype=np.float32)
-        self.obj_vtxes.cu().set(np.array([
-            [-0.5, -0.5, 0., 1.],
-            [ 0.5, -0.5, 0., 1.],
-            [ 0.5,  0.5, 0., 1.],
+        self.obj_demo_mesh = GpuMesh(num_idxes=3, vtxes_shape=(3,))
+        self.obj_demo_mesh.idxes.cu().set(np.array([
+            0, 1, 2,
+        ], dtype=np.uint32))
+        self.obj_demo_mesh.vtx_pos.cu().set(np.array([
+            # [-0.5, -0.5, 0., 1.],
+            # [ 0.5, -0.5, 0., 1.],
+            # [ 0.5,  0.5, 0., 1.],
+            [ 0, 0, 4000., 1.],
+            [ 400, 400, 4100., 1.],
+            [ 400,  0, 3900., 1.],
         ], dtype=np.float32))
-
-        self.obj_vao = glGenVertexArrays(1)
-        glBindVertexArray(self.obj_vao)
-        glBindBuffer(GL_ARRAY_BUFFER, self.obj_vtxes.gl())
-        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * np.dtype(np.float32).itemsize, None)
-        glEnableVertexAttribArray(0)
-        glBindBuffer(GL_ARRAY_BUFFER, 0)
-        glBindVertexArray(0)
-
-
+        self.obj_demo_mesh.vtx_color.cu().set(np.array([
+            [250, 0, 0],
+            [ 0, 250, 0],
+            [ 0,  0, 250],
+        ], dtype=np.uint8))
+        
         parser = argparse.ArgumentParser(description='Convert a realsense .bag file into training data for RDF')
         parser.add_argument('-i', '--bag_in', nargs='?', required=True, type=str, help='Path to realsense .bag input file')
         parser.add_argument('-o', '--out', nargs='?', required=True, type=str, help='Directory to save formatted date')
@@ -118,15 +122,15 @@ class LiveDataConvert(AppBase):
 
         self.align = rs.align(rs.stream.depth)
 
-        self.pts_gpu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.float32)
+        self.obj_mesh = GpuMesh(
+            num_idxes = (self.DIM_X - 1) * (self.DIM_Y - 1) * 6,
+            vtxes_shape = (self.DIM_Y, self.DIM_X))
 
         self.depth_gpu = GpuBuffer((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
         if self.mask_model:
             self.mask_labels = np.zeros((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
             self.mask_labels_gpu = GpuBuffer((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
-
-        self.color_image_gpu = GpuBuffer((self.DIM_Y, self.DIM_X, 3), dtype=np.uint8)
 
         self.color_mapping = None
         self.color_mapping_gpu = GpuBuffer((self.COLOR_EM_NUM_COLORS, 3), dtype=np.uint8)
@@ -141,6 +145,8 @@ class LiveDataConvert(AppBase):
 
         self.fbo = GpuFramebuffer((self.DIM_X, self.DIM_Y))
         self.fbo_rgba = GpuTexture((self.DIM_X, self.DIM_Y), GL_RGBA, GL_UNSIGNED_BYTE)
+
+        self.fbo_rgb_2 = GpuTexture((self.DIM_X, self.DIM_Y), GL_RGB, GL_UNSIGNED_BYTE)
 
 
     # def make_modified
@@ -176,7 +182,7 @@ class LiveDataConvert(AppBase):
                     np.int32(self.DIM_Y),
                     np.int32(self.COLOR_EM_NUM_COLORS),
                     colors_gpu.cu(),
-                    self.color_image_gpu.cu(),
+                    self.obj_mesh.vtx_color.cu(),
                     pixel_counts_per_group_gpu.cu(),
                     grid=grid_dim3,
                     block=block_dim3)
@@ -222,7 +228,58 @@ class LiveDataConvert(AppBase):
         # self.color_image_gpu
         # self.depth_gpu
 
-        print('hi')
+        # self.obj_mesh.idxes
+
+        pts_cpu = self.obj_mesh.vtx_pos.cu().get()
+
+        # slow, naive way to build map
+        idxes_cpu = np.zeros((self.obj_mesh.idxes.cu().shape[0],), dtype=np.uint32)
+        _i = 0
+        for _x in range(self.DIM_X - 1):
+            for _y in range(self.DIM_Y - 1):
+                if pts_cpu[_y, _x, 3] == 1. and pts_cpu[_y + 1, _x, 3] == 1. and pts_cpu[_y, _x + 1, 3] == 1. and pts_cpu[_y +1, _x+1, 3] == 1:
+                    idxes_cpu[_i * 3] = (_y * self.DIM_X) + _x
+                    idxes_cpu[_i * 3 + 1] = ((_y + 1) * self.DIM_X) + _x
+                    idxes_cpu[_i * 3 + 2] = (_y * self.DIM_X) + _x + 1
+                    _i += 1
+                    idxes_cpu[_i * 3] = ((_y + 1) * self.DIM_X) + _x
+                    idxes_cpu[_i * 3 + 1] = (_y * self.DIM_X) + (_x + 1)
+                    idxes_cpu[_i * 3 + 2] = ((_y + 1) * self.DIM_X) + (_x + 1)
+                    _i += 1
+
+        print('num idxes: ', _i * 3)
+
+        self.obj_mesh.num_idxes = _i * 3
+        
+        self.obj_mesh.idxes.cu().set(idxes_cpu)
+
+        # durr, some dummy OpenGL
+        self.fbo.bind(self.fbo_rgba)
+
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+
+        glClearColor(0.3, 0.8, 0, 1)
+        # glClear(GL_COLOR_BUFFER_BIT)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+
+        self.depth_cam.use()
+
+        tfr = glm.perspectiveLH(0.6, 1.0, 10., 10000.)
+
+        # tfr = glm.rotate(glm.mat4(), self.frame_count * 0.1, glm.vec3((0., 0., 1.)))
+
+        # tfr = glm.translate(glm.mat4(), glm.vec3(0.4, -0.4, 0.))
+        glUniformMatrix4fv(self.depth_cam.u_pos('tf'), 1, GL_TRUE, np.array(tfr))
+
+        self.obj_mesh.draw()
+
+        self.obj_demo_mesh.draw()
+
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
+
+        # print('hi')
     
     def finish(self):
         glfw.set_window_should_close(self.window, True)
@@ -276,12 +333,12 @@ class LiveDataConvert(AppBase):
             self.PP,
             self.FOCAL,
             self.depth_gpu.cu(),
-            self.pts_gpu.cu(),
+            self.obj_mesh.vtx_pos.cu(),
             grid=grid_dim,
             block=block_dim)
 
         if not self.calibrated_plane.is_set() or self.frame_count % self.FRAMES_PER_RECOMPUTE_PLANE == 0:
-            self.calibrated_plane.make(self.pts_gpu, (self.DIM_X, self.DIM_Y))
+            self.calibrated_plane.make(self.obj_mesh.vtx_pos, (self.DIM_X, self.DIM_Y))
         
         # every point..
         grid_dim2 = (((self.DIM_X * self.DIM_Y) // 1024) + 1, 1, 1)
@@ -290,7 +347,7 @@ class LiveDataConvert(AppBase):
         # convert deprojected points to plane space
         self.points_ops.transform_points(
             np.int32(self.DIM_X * self.DIM_Y),
-            self.pts_gpu.cu(),
+            self.obj_mesh.vtx_pos.cu(),
             self.calibrated_plane.get_mat(),
             grid=grid_dim2,
             block=block_dim2)
@@ -299,14 +356,14 @@ class LiveDataConvert(AppBase):
         self.calibrated_plane.filter_points_by_plane(
             np.int32(self.DIM_X * self.DIM_Y),
             np.float32(self.PLANE_Z_THRESHOLD),
-            self.pts_gpu.cu(),
+            self.obj_mesh.vtx_pos.cu(),
             grid=grid_dim2,
             block=block_dim2)
 
         # convert deprojected points back to camera space
         self.points_ops.transform_points(
             np.int32(self.DIM_X * self.DIM_Y),
-            self.pts_gpu.cu(),
+            self.obj_mesh.vtx_pos.cu(),
             np.linalg.inv(self.calibrated_plane.get_mat()),
             grid=grid_dim2,
             block=block_dim2)
@@ -317,7 +374,7 @@ class LiveDataConvert(AppBase):
         self.points_ops.depths_from_points(
             np.array([1, self.DIM_X, self.DIM_Y, -1], dtype=np.int32),
             self.depth_gpu.cu(),
-            self.pts_gpu.cu(),
+            self.obj_mesh.vtx_pos.cu(),
             grid=grid_dim,
             block=block_dim)
 
@@ -335,9 +392,12 @@ class LiveDataConvert(AppBase):
         # should be an input option??
         # color_image[:,750:] = np.array([0, 0, 0], dtype=np.uint8)
 
-        self.color_image_gpu.cu().set(color_image)
+        self.obj_mesh.vtx_color.cu().set(color_image)
 
         self.rerender_image()
+
+        # vtx_color -> color image ?
+        # new depth_gpu -> depth_np ?
 
         if self.mask_model:
 
@@ -351,7 +411,7 @@ class LiveDataConvert(AppBase):
             depth_np[depth_np == MAX_UINT16] = 0
             self.depth_gpu.cu().set(depth_np)
 
-        self.color_image_gpu.cu().set(color_image)
+        self.obj_mesh.vtx_color.cu().set(color_image)
 
         if self.color_mapping is None:
             self.color_mapping = self.make_color_mapping()
@@ -365,12 +425,12 @@ class LiveDataConvert(AppBase):
             np.int32(self.DIM_Y),
             np.int32(self.COLOR_EM_NUM_COLORS),
             self.color_mapping_gpu.cu(),
-            self.color_image_gpu.cu(),
+            self.obj_mesh.vtx_color.cu(),
             grid=grid_dim3,
             block=block_dim3)
 
         # render raw labels image from color image (1..n)
-        self.color_image_gpu.cu().get(color_image)
+        self.obj_mesh.vtx_color.cu().get(color_image)
         self.labels_image[:,:] = 0
         for xx in range(self.COLOR_EM_NUM_COLORS):
             self.labels_image[np.where(np.all(color_image == self.color_mapping[xx], axis=2))] = xx + 1 # group 0 is null group, starts at 1
@@ -406,25 +466,7 @@ class LiveDataConvert(AppBase):
         # poor mans dpi for now..
         imgui.image(self.color_image_rgba_gpu.gl(), self.DIM_X, self.DIM_Y)
 
-        # durr, some OpenGL
-        self.fbo.bind(self.fbo_rgba)
-
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
-
-        glClearColor(0.3, 0.8, 0, 1)
-        # glClear(GL_COLOR_BUFFER_BIT)
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-
-        self.depth_cam.use()
-        self.obj_vtxes.gl()
-        self.obj_idxes.gl()
-        glBindVertexArray(self.obj_vao)
-
-        glDrawArrays(GL_TRIANGLES, 0, 3)
-
-
-        glBindFramebuffer(GL_FRAMEBUFFER, 0)
-
+        # imgui.image(self.fbo_rgb_2.gl(), self.DIM_X, self.DIM_Y)
         imgui.image(self.fbo_rgba.gl(), self.DIM_X, self.DIM_Y)
 
 
