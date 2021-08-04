@@ -8,8 +8,9 @@ import numpy as np
 # Texture object holding OpenGL & CUDA interop texture.
 
 class GpuTexture:
-    def __init__(self, dims, format, dtype):
+    def __init__(self, dims, internalFormat, format, dtype):
         self.dims = dims
+        self.internalFormat = internalFormat
         self.format = format
         self.dtype = dtype
 
@@ -21,7 +22,7 @@ class GpuTexture:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        glTexImage2D(GL_TEXTURE_2D, 0, self.format, self.dims[0], self.dims[1], 0, self.format, self.dtype, None)
+        glTexImage2D(GL_TEXTURE_2D, 0, self.internalFormat, self.dims[0], self.dims[1], 0, self.format, self.dtype, None)
         glBindTexture(GL_TEXTURE_2D, 0)
 
         # self._cu_handle = pycuda.gl.RegisteredImage(int(self._gl))

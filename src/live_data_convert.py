@@ -138,15 +138,17 @@ class LiveDataConvert(AppBase):
         self.labels_image = np.zeros((self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
         self.color_image_rgba = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
-        self.color_image_rgba_gpu = GpuTexture((self.DIM_X, self.DIM_Y), GL_RGBA, GL_UNSIGNED_BYTE)
+        self.color_image_rgba_gpu = GpuTexture((self.DIM_X, self.DIM_Y), GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE)
 
         # Streaming loop
         self.frame_count = 0
 
         self.fbo = GpuFramebuffer((self.DIM_X, self.DIM_Y))
-        self.fbo_rgba = GpuTexture((self.DIM_X, self.DIM_Y), GL_RGBA, GL_UNSIGNED_BYTE)
 
-        self.fbo_rgb_2 = GpuTexture((self.DIM_X, self.DIM_Y), GL_RGB, GL_UNSIGNED_BYTE)
+        self.fbo_rgba = GpuTexture((self.DIM_X, self.DIM_Y), GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE)
+        self.fbo_depth = GpuTexture((self.DIM_X, self.DIM_Y), GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT)
+
+        self.fbo_rgb_2 = GpuTexture((self.DIM_X, self.DIM_Y), GL_RGB, GL_RGB, GL_UNSIGNED_BYTE)
 
 
     # def make_modified
@@ -254,13 +256,20 @@ class LiveDataConvert(AppBase):
         self.obj_mesh.idxes.cu().set(idxes_cpu)
 
         # durr, some dummy OpenGL
-        self.fbo.bind(self.fbo_rgba)
+        self.fbo.bind(self.fbo_rgba, self.fbo_depth)
+        # glDrawBuffers(2, [GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1])
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
 
         glClearColor(0., 0., 0., 1)
+        glClear(GL_COLOR_BUFFER_BIT)
+
+        # glDrawBuffers(1, [GL_COLOR_ATTACHMENT1])
+        # glClearColor(69, 0 ,0, 0)
         # glClear(GL_COLOR_BUFFER_BIT)
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        # glClear(GL_COLOR_BUFFER_BIT)
+
+        # glDrawBuffers(2, [GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1])
 
         self.depth_cam.use()
 
@@ -274,19 +283,39 @@ class LiveDataConvert(AppBase):
 
         self.obj_mesh.draw()
 
+
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
 
         glBindTexture(GL_TEXTURE_2D, self.fbo_rgba.gl())
         rgb_rendered = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
         glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, array=rgb_rendered)
         rgb_rendered = rgb_rendered[:,:,0:3]
 
-        rgb_target = self.obj_mesh.vtx_color.cu().get()
+        glBindTexture(GL_TEXTURE_2D, self.fbo_depth.gl())
+        rgb_depth_rendered = np.zeros((self.DIM_Y, self.DIM_X), dtype=np.uint16)
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, array=rgb_depth_rendered)
 
-        rgb_diff = np.abs(rgb_rendered.astype(np.int16) - rgb_target.astype(np.int16)).astype(np.uint8)
+        depth_target = self.depth_gpu.cu().get()
+
+        """
+        depth_diff = (rgb_depth_rendered.astype(np.int16) - depth_target.astype(np.int16)).reshape((self.DIM_Y, self.DIM_X))
+        depth_diff_color = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
+        depth_diff_color[:,:,0] = (255 * depth_diff) // np.max(depth_diff)
+        depth_diff_color[:,:,1] = (255 * depth_diff) // np.max(depth_diff)
+        depth_diff_color[:,:,2] = (255 * depth_diff) // np.max(depth_diff)
+        depth_diff_color[:,:,3] = (255 * depth_diff) // np.max(depth_diff)
+        """
+
+        depth_rgba = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
+        depth_rgba[:,:,0] = depth_target // 255
+        depth_rgba[:,:,3] = 255
+
+        # rgb_target = self.obj_mesh.vtx_color.cu().get()
+        # rgb_diff = np.abs(rgb_rendered.astype(np.int16) - rgb_target.astype(np.int16)).astype(np.uint8)
 
         glBindTexture(GL_TEXTURE_2D, self.fbo_rgb_2.gl())
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.DIM_X, self.DIM_Y, GL_RGB, GL_UNSIGNED_BYTE, rgb_diff)
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.DIM_X, self.DIM_Y, GL_RGB, GL_UNSIGNED_BYTE, depth_rgba)
     
     def finish(self):
         glfw.set_window_should_close(self.window, True)
