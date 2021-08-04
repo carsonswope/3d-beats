@@ -9,6 +9,14 @@ def sizeof_fmt(num, suffix='B'):
         num /= 1024.0
     return "%.1f%s%s" % (num, 'Y', suffix)
 
+def rs_projection(f, w, h, ppx, ppy, zmin, zmax):
+    return np.array([
+        [2*f / w, 0, 0, 0],
+        [0, 2*f / h, 0, 0],
+        [2*(ppx/w)-1, 2*(ppy/h)-1, (zmax+zmin)/(zmax-zmin), 1],
+        [0, 0, 2*zmax*zmin/(zmin-zmax), 0]
+    ], dtype=np.float32).T
+
 class PagelockedCounter:
     def __init__(self):
         self.d = cu.pagelocked_zeros((1,), np.int64)

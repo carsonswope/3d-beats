@@ -20,7 +20,7 @@ from calibrated_plane import *
 np.set_printoptions(suppress=True)
 
 
-from util import MAX_UINT16
+from util import MAX_UINT16, rs_projection
 
 
 from engine.window import AppBase
@@ -258,28 +258,35 @@ class LiveDataConvert(AppBase):
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
 
-        glClearColor(0.3, 0.8, 0, 1)
+        glClearColor(0., 0., 0., 1)
         # glClear(GL_COLOR_BUFFER_BIT)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
         self.depth_cam.use()
 
-        tfr = glm.perspectiveLH(0.6, 1.0, 10., 10000.)
+        cam_proj = rs_projection(self.FOCAL, self.DIM_X, self.DIM_Y, self.PP[0], self.PP[1], 50., 50000.)
+        self.depth_cam.u_mat4('cam_proj', cam_proj)
 
-        # tfr = glm.rotate(glm.mat4(), self.frame_count * 0.1, glm.vec3((0., 0., 1.)))
-
-        # tfr = glm.translate(glm.mat4(), glm.vec3(0.4, -0.4, 0.))
-        glUniformMatrix4fv(self.depth_cam.u_pos('tf'), 1, GL_TRUE, np.array(tfr))
+        obj_tform = np.linalg.inv(self.calibrated_plane.plane) @ \
+            np.array(glm.translate(glm.mat4(), glm.vec3(0., 0., 0.))) @ \
+            self.calibrated_plane.plane
+        self.depth_cam.u_mat4('obj_tform', obj_tform)
 
         self.obj_mesh.draw()
 
-        self.obj_demo_mesh.draw()
-
-
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
+        glBindTexture(GL_TEXTURE_2D, self.fbo_rgba.gl())
+        rgb_rendered = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, array=rgb_rendered)
+        rgb_rendered = rgb_rendered[:,:,0:3]
 
-        # print('hi')
+        rgb_target = self.obj_mesh.vtx_color.cu().get()
+
+        rgb_diff = np.abs(rgb_rendered.astype(np.int16) - rgb_target.astype(np.int16)).astype(np.uint8)
+
+        glBindTexture(GL_TEXTURE_2D, self.fbo_rgb_2.gl())
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.DIM_X, self.DIM_Y, GL_RGB, GL_UNSIGNED_BYTE, rgb_diff)
     
     def finish(self):
         glfw.set_window_should_close(self.window, True)
@@ -464,10 +471,13 @@ class LiveDataConvert(AppBase):
 
         imgui.text('image below')
         # poor mans dpi for now..
-        imgui.image(self.color_image_rgba_gpu.gl(), self.DIM_X, self.DIM_Y)
+        imgui.image(self.color_image_rgba_gpu.gl(), self.DIM_X // 2, self.DIM_Y // 2)
+        imgui.text('diff..')
+        imgui.image(self.fbo_rgb_2.gl(), self.DIM_X // 2, self.DIM_Y // 2)
 
+        imgui.text('re-rendered')
         # imgui.image(self.fbo_rgb_2.gl(), self.DIM_X, self.DIM_Y)
-        imgui.image(self.fbo_rgba.gl(), self.DIM_X, self.DIM_Y)
+        imgui.image(self.fbo_rgba.gl(), self.DIM_X // 2, self.DIM_Y // 2)
 
 
 if __name__ == '__main__':
