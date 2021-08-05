@@ -72,7 +72,50 @@ void transform_points(int num_pts, glm::vec4* pts, glm::mat4 t) {
     if (p.w != 1.) return;
     auto new_p = glm::transpose(t) * p;
     pts[i] = new_p;
+}}
 
+extern "C" {__global__
+void make_triangles(const int DIM_X, const int DIM_Y, uint64* triangle_count, float4* _pts, uint32* idxes) {
+    const int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+    const int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+
+    if (x >= (DIM_X - 1) || y >= (DIM_Y - 1)) return;
+
+    Array2d<float4> pts(_pts, {DIM_Y, DIM_X}, float4{0., 0., 0., 0.});
+    
+    float4 p[4] = {
+        pts.get({y,   x  }),
+        pts.get({y,   x+1}),
+        pts.get({y+1, x  }),
+        pts.get({y+1, x+1})
+    };
+
+    // atomicAdd(triangle_count, 2);
+
+    
+    if (p[0].w > 0. && p[1].w > 0. && p[2].w > 0. && p[3].w > 0. ) {
+        int p_idx[4] = {
+            pts.get_idx({y,   x  }),
+            pts.get_idx({y,   x+1}),
+            pts.get_idx({y+1, x  }),
+            pts.get_idx({y+1, x+1})
+        };
+
+        const auto tri_idx = atomicAdd(triangle_count, 2);
+        const auto v_idx = tri_idx * 3;
+        idxes[v_idx + 0] = p_idx[0];
+        idxes[v_idx + 1] = p_idx[1];
+        idxes[v_idx + 2] = p_idx[2];
+
+        // idxes[v_idx + 3] = 0
+        // idxes[v_idx + 4] = 1
+        // idxes[v_idx + 5] = 2
+
+        idxes[v_idx + 3] = p_idx[1];
+        idxes[v_idx + 4] = p_idx[2];
+        idxes[v_idx + 5] = p_idx[3];
+    }
+    
 }}
 
 extern "C" {__global__

@@ -76,7 +76,6 @@ public:
         data[idx] = val;
     }
 
-private:
     __device__ int get_idx(const int3 i) {
         const bool out_of_bounds =
             i.x < 0 || i.x >= dims.x ||
@@ -121,7 +120,6 @@ public:
         data[idx] = val;
     }
 
-private:
     __device__ int get_idx(const int2 i) {
         const bool out_of_bounds = 
             i.x < 0 || i.x >= dims.x ||

@@ -10,10 +10,6 @@ import glfw
 
 import glm
 
-# import pycuda.driver as cu
-# import pycuda.autoinit
-# import pycuda.curandom as cu_rand
-
 from decision_tree import *
 from cuda.points_ops import *
 from calibrated_plane import *
@@ -218,66 +214,39 @@ class LiveDataConvert(AppBase):
         # - plane matrix.
 
         # 1. create idxes for triangles to re-create depth image.
-        # 2. convert pts to plane space
-        # 3. apply random transformation to pts:
-        #    - scale
-        #    - rotation
-        #    - skew? translate?
-        # 4. convert pts back to camera space
-        # 5. re-render color and depth
+        # 2. convert transform matrix of the following operations:
+        #    - convert pts to plane space
+        #    - apply random transformation to pts:
+        #      - scale
+        #      - rotation
+        #      - skew? translate?
+        #    - convert pts back to camera space
+        # 3. re-render color and depth images
 
         # OUTPUT: new values to:
         # self.color_image_gpu
         # self.depth_gpu
 
-        # self.obj_mesh.idxes
-
-        pts_cpu = self.obj_mesh.vtx_pos.cu().get()
-
-        # slow, naive way to build map
-        idxes_cpu = np.zeros((self.obj_mesh.idxes.cu().shape[0],), dtype=np.uint32)
-        _i = 0
-        for _x in range(self.DIM_X - 1):
-            for _y in range(self.DIM_Y - 1):
-                if pts_cpu[_y, _x, 3] == 1. and pts_cpu[_y + 1, _x, 3] == 1. and pts_cpu[_y, _x + 1, 3] == 1. and pts_cpu[_y +1, _x+1, 3] == 1:
-                    idxes_cpu[_i * 3] = (_y * self.DIM_X) + _x
-                    idxes_cpu[_i * 3 + 1] = ((_y + 1) * self.DIM_X) + _x
-                    idxes_cpu[_i * 3 + 2] = (_y * self.DIM_X) + _x + 1
-                    _i += 1
-                    idxes_cpu[_i * 3] = ((_y + 1) * self.DIM_X) + _x
-                    idxes_cpu[_i * 3 + 1] = (_y * self.DIM_X) + (_x + 1)
-                    idxes_cpu[_i * 3 + 2] = ((_y + 1) * self.DIM_X) + (_x + 1)
-                    _i += 1
-
-        print('num idxes: ', _i * 3)
-
-        self.obj_mesh.num_idxes = _i * 3
-        
-        self.obj_mesh.idxes.cu().set(idxes_cpu)
+        num_triangles = self.points_ops.make_triangles(self.DIM_X, self.DIM_Y, self.obj_mesh.vtx_pos, self.obj_mesh.idxes)
+        self.obj_mesh.num_idxes = int(num_triangles * 3)
 
         # durr, some dummy OpenGL
         self.fbo.bind(self.fbo_rgba, self.fbo_depth)
-        # glDrawBuffers(2, [GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1])
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+        glEnable(GL_DEPTH_TEST)
 
         glClearColor(0., 0., 0., 1)
-        glClear(GL_COLOR_BUFFER_BIT)
-
-        # glDrawBuffers(1, [GL_COLOR_ATTACHMENT1])
-        # glClearColor(69, 0 ,0, 0)
-        # glClear(GL_COLOR_BUFFER_BIT)
-        # glClear(GL_COLOR_BUFFER_BIT)
-
-        # glDrawBuffers(2, [GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1])
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
         self.depth_cam.use()
 
         cam_proj = rs_projection(self.FOCAL, self.DIM_X, self.DIM_Y, self.PP[0], self.PP[1], 50., 50000.)
         self.depth_cam.u_mat4('cam_proj', cam_proj)
 
+        # obj_tform = np.identity(4, dtype=np.float32)
         obj_tform = np.linalg.inv(self.calibrated_plane.plane) @ \
-            np.array(glm.translate(glm.mat4(), glm.vec3(0., 0., 0.))) @ \
+            np.array(glm.translate(glm.mat4(), glm.vec3(1500., 0., 0.))) @ \
             self.calibrated_plane.plane
         self.depth_cam.u_mat4('obj_tform', obj_tform)
 
@@ -286,36 +255,17 @@ class LiveDataConvert(AppBase):
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
-
+        # TODO: more efficient copy from framebuffer to cuda array
         glBindTexture(GL_TEXTURE_2D, self.fbo_rgba.gl())
         rgb_rendered = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
         glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, array=rgb_rendered)
         rgb_rendered = rgb_rendered[:,:,0:3]
+        self.obj_mesh.vtx_color.cu().set(rgb_rendered)
 
         glBindTexture(GL_TEXTURE_2D, self.fbo_depth.gl())
         rgb_depth_rendered = np.zeros((self.DIM_Y, self.DIM_X), dtype=np.uint16)
         glGetTexImage(GL_TEXTURE_2D, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, array=rgb_depth_rendered)
-
-        depth_target = self.depth_gpu.cu().get()
-
-        """
-        depth_diff = (rgb_depth_rendered.astype(np.int16) - depth_target.astype(np.int16)).reshape((self.DIM_Y, self.DIM_X))
-        depth_diff_color = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
-        depth_diff_color[:,:,0] = (255 * depth_diff) // np.max(depth_diff)
-        depth_diff_color[:,:,1] = (255 * depth_diff) // np.max(depth_diff)
-        depth_diff_color[:,:,2] = (255 * depth_diff) // np.max(depth_diff)
-        depth_diff_color[:,:,3] = (255 * depth_diff) // np.max(depth_diff)
-        """
-
-        depth_rgba = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
-        depth_rgba[:,:,0] = depth_target // 255
-        depth_rgba[:,:,3] = 255
-
-        # rgb_target = self.obj_mesh.vtx_color.cu().get()
-        # rgb_diff = np.abs(rgb_rendered.astype(np.int16) - rgb_target.astype(np.int16)).astype(np.uint8)
-
-        glBindTexture(GL_TEXTURE_2D, self.fbo_rgb_2.gl())
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.DIM_X, self.DIM_Y, GL_RGB, GL_UNSIGNED_BYTE, depth_rgba)
+        self.depth_gpu.cu().set(rgb_depth_rendered)
     
     def finish(self):
         glfw.set_window_should_close(self.window, True)
@@ -356,9 +306,8 @@ class LiveDataConvert(AppBase):
 
         # Get depth frame
         depth_frame = frames.get_depth_frame()
-
-        depth_np = np.asanyarray(depth_frame.data)
-        self.depth_gpu.cu().set(depth_np)
+        # depth_np = 
+        self.depth_gpu.cu().set(np.asanyarray(depth_frame.data))
 
         grid_dim = (1, (self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1)
         block_dim = (1,32,32)
@@ -415,7 +364,7 @@ class LiveDataConvert(AppBase):
             block=block_dim)
 
         # copy back to cpu-side depth frame memory, so align processing block can run
-        self.depth_gpu.cu().get(depth_np)
+        # self.depth_gpu.cu().get(depth_np)
 
         frames_aligned = self.align.process(frames)
         color_frame = frames_aligned.get_color_frame()
@@ -429,11 +378,10 @@ class LiveDataConvert(AppBase):
         # color_image[:,750:] = np.array([0, 0, 0], dtype=np.uint8)
 
         self.obj_mesh.vtx_color.cu().set(color_image)
-
         self.rerender_image()
 
-        # vtx_color -> color image ?
-        # new depth_gpu -> depth_np ?
+        color_image = self.obj_mesh.vtx_color.cu().get()
+        depth_np = self.depth_gpu.cu().get()[0]
 
         if self.mask_model:
 
@@ -500,13 +448,13 @@ class LiveDataConvert(AppBase):
 
         imgui.text('image below')
         # poor mans dpi for now..
-        imgui.image(self.color_image_rgba_gpu.gl(), self.DIM_X // 2, self.DIM_Y // 2)
-        imgui.text('diff..')
-        imgui.image(self.fbo_rgb_2.gl(), self.DIM_X // 2, self.DIM_Y // 2)
+        imgui.image(self.color_image_rgba_gpu.gl(), self.DIM_X, self.DIM_Y)
+        # imgui.text('diff..')
+        # imgui.image(self.fbo_rgb_2.gl(), self.DIM_X // 2, self.DIM_Y // 2)
 
         imgui.text('re-rendered')
         # imgui.image(self.fbo_rgb_2.gl(), self.DIM_X, self.DIM_Y)
-        imgui.image(self.fbo_rgba.gl(), self.DIM_X // 2, self.DIM_Y // 2)
+        imgui.image(self.fbo_rgba.gl(), self.DIM_X, self.DIM_Y)
 
 
 if __name__ == '__main__':
