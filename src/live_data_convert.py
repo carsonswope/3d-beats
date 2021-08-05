@@ -15,6 +15,16 @@ from cuda.points_ops import *
 from calibrated_plane import *
 np.set_printoptions(suppress=True)
 
+"""
+for filtered:
+                "-i", "./datagen/sets/full_4class/f1.bag",
+                "-o", "./datagen/sets/full_4class/f1_randomized/",
+                "--colors", "3",
+                "--mask_model", "./models_out/full_4class_d123.npy",
+                "--mask_label", "3",
+                "--plane_z_threshold", "55.",
+                "--max_images", "16"
+"""
 
 from util import MAX_UINT16, rs_projection
 
@@ -203,7 +213,7 @@ class LiveDataConvert(AppBase):
         return best_colors
     
     # converts incoming depth image to geometry, 
-    def rerender_image(self):
+    def rerender_image(self, vtx_center):
         # these variables should be good:
         # self.color_image_gpu
         # self.depth_gpu
@@ -244,9 +254,22 @@ class LiveDataConvert(AppBase):
         cam_proj = rs_projection(self.FOCAL, self.DIM_X, self.DIM_Y, self.PP[0], self.PP[1], 50., 50000.)
         self.depth_cam.u_mat4('cam_proj', cam_proj)
 
+        SCALE_VARIANCE = 0.1
+        ROTATE_VARIANCE = 0.01
+        TRANSLATE_VARIANCE = 50
+        tform_scale = np.random.default_rng().normal(1., SCALE_VARIANCE, 3)
+        tform_rotate = np.random.default_rng().normal(0., ROTATE_VARIANCE, 3)
+        tform_translate = np.random.default_rng().normal(0., TRANSLATE_VARIANCE, 3)
+
         # obj_tform = np.identity(4, dtype=np.float32)
         obj_tform = np.linalg.inv(self.calibrated_plane.plane) @ \
-            np.array(glm.translate(glm.mat4(), glm.vec3(1500., 0., 0.))) @ \
+            np.array(glm.translate(glm.mat4(), glm.vec3( vtx_center[0],  vtx_center[1],  vtx_center[2]))) @ \
+            np.array(glm.translate(glm.mat4(), glm.vec3(tform_translate[0], tform_translate[1], tform_translate[2]))) @ \
+            np.array(glm.rotate(glm.mat4(), tform_rotate[2], glm.vec3(0., 0., 1.))) @ \
+            np.array(glm.rotate(glm.mat4(), tform_rotate[1], glm.vec3(0., 1., 0.))) @ \
+            np.array(glm.rotate(glm.mat4(), tform_rotate[0], glm.vec3(1., 0., 0.))) @ \
+            np.array(glm.scale(glm.mat4(), glm.vec3(tform_scale[0], tform_scale[1], tform_scale[2]))) @ \
+            np.array(glm.translate(glm.mat4(), glm.vec3(-vtx_center[0], -vtx_center[1], -vtx_center[2]))) @ \
             self.calibrated_plane.plane
         self.depth_cam.u_mat4('obj_tform', obj_tform)
 
@@ -345,6 +368,10 @@ class LiveDataConvert(AppBase):
             grid=grid_dim2,
             block=block_dim2)
 
+        # get mean of vtxes in plane space (for later)
+        vtx_center = np.sum(self.obj_mesh.vtx_pos.cu().get().reshape((-1, 4)), axis=0)
+        vtx_center = vtx_center / vtx_center[3]
+
         # convert deprojected points back to camera space
         self.points_ops.transform_points(
             np.int32(self.DIM_X * self.DIM_Y),
@@ -378,7 +405,7 @@ class LiveDataConvert(AppBase):
         # color_image[:,750:] = np.array([0, 0, 0], dtype=np.uint8)
 
         self.obj_mesh.vtx_color.cu().set(color_image)
-        self.rerender_image()
+        self.rerender_image(vtx_center)
 
         color_image = self.obj_mesh.vtx_color.cu().get()
         depth_np = self.depth_gpu.cu().get()[0]
