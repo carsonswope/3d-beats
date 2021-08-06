@@ -279,6 +279,7 @@ class LiveDataConvert(AppBase):
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
         # TODO: more efficient copy from framebuffer to cuda array
+
         glBindTexture(GL_TEXTURE_2D, self.fbo_rgba.gl())
         rgb_rendered = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
         glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, array=rgb_rendered)
@@ -289,6 +290,7 @@ class LiveDataConvert(AppBase):
         rgb_depth_rendered = np.zeros((self.DIM_Y, self.DIM_X), dtype=np.uint16)
         glGetTexImage(GL_TEXTURE_2D, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, array=rgb_depth_rendered)
         self.depth_gpu.cu().set(rgb_depth_rendered)
+        # self.fbo_depth.copy_to_gpu_buffer(self.depth_gpu)
     
     def finish(self):
         glfw.set_window_should_close(self.window, True)

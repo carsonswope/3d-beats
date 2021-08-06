@@ -36,10 +36,14 @@ def main():
 
     for c_id, c in configs.items():
 
-        print(f'dataset: {c_id}, num_images: {c[0].total_available_images}')
+        num_images = c[0].total_available_images
+        # testing phase..
+        # num_images = 1
+
+        print(f'dataset: {c_id}, num_images: {num_images}')
 
         # for i in range(1):
-        for i in range(c[0].total_available_images):
+        for i in range(num_images):
             in_pfx = f'{c[1]}/{str(i).zfill(8)}_'
             out_pfx = f'{OUT_PATH}/{str(j).zfill(8)}_'
             shutil.copy(f'{in_pfx}depth.png', f'{out_pfx}depth.png')

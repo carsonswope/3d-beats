@@ -15,8 +15,6 @@ from calibrated_plane import *
 from engine.window import AppBase
 from engine.buffer import GpuBuffer
 
-
-
 class RunLiveApp(AppBase):
     def __init__(self):
         super().__init__(title="Test-icles")
