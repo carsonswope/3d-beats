@@ -3,7 +3,9 @@ import pycuda.driver as cu
 import pycuda.curandom as cu_rand
 import pycuda.gpuarray as cu_array
 
+import glm
 import numpy as np
+
 
 import cuda.py_nvcc_utils as py_nvcc_utils
 
@@ -76,4 +78,10 @@ class CalibratedPlane():
         calibrated_plane = np.zeros((4, 4), dtype=np.float32)
         cu.memcpy_dtoh(calibrated_plane, self.candidate_planes_cu[best_inlier_idx].ptr)
 
-        self.plane = np.copy(calibrated_plane)
+        # calculate where ray out of [0,0,1] ray from camera intersects with plane - in plane space
+        p = calibrated_plane[2:3,2:][0]
+        p0, p1 = p[0], p[1]
+        c = calibrated_plane @ np.array([0., 0., -p1/p0, 1])
+        assert np.abs(c[2]) < 0.001
+
+        self.plane = np.array(glm.translate(glm.mat4(), (-c[0], -c[1], 0))) @ calibrated_plane

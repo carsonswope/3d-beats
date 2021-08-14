@@ -90,6 +90,9 @@ class AppBase():
 
             self.tick(t)
 
+            # make sure to switch back to fill for imgui
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+
             self.imgui.process_inputs()
             imgui.render()
             self.imgui.render(imgui.get_draw_data())

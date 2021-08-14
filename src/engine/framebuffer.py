@@ -16,19 +16,30 @@ class GpuFramebuffer:
     def id(self):
         return self._id
     
-    def bind(self, rgba_tex, depth_tex):
+    def bind(self, rgba_tex=None, depth_tex=None):
 
-        if self.dims != rgba_tex.dims or self.dims != depth_tex.dims:
-            print('Error. input texture has different dimensions than framebuffer')
+        if rgba_tex is None and depth_tex is None:
+            print('must bind either rgba or depth texture to fbo')
+            return
+        
+        if rgba_tex is not None and self.dims != rgba_tex.dims:
+            print('Error. rgba texture has different dimensions than framebuffer')
+            return
+
+        if depth_tex is not None and self.dims != depth_tex.dims:
+            print('Error. depth texture has different dimensions than framebuffer')
             return
 
         glBindFramebuffer(GL_FRAMEBUFFER, self.id)
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, self.depth_internal);  
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rgba_tex.gl(), 0)
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, depth_tex.gl(), 0)
+        if rgba_tex:
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rgba_tex.gl(), 0)
+        if depth_tex:
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, depth_tex.gl(), 0)
         glDrawBuffers(np.array([GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1], dtype=np.uint32))
 
         if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE:
-            print('huh?')
+            print('error. gl framebuffer not GL_FRAMEBUFFER_COMPLETE')
+            return
         
         glViewport(0, 0, self.dims[0], self.dims[1])

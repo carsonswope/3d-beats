@@ -107,10 +107,6 @@ void make_triangles(const int DIM_X, const int DIM_Y, uint64* triangle_count, fl
         idxes[v_idx + 1] = p_idx[1];
         idxes[v_idx + 2] = p_idx[2];
 
-        // idxes[v_idx + 3] = 0
-        // idxes[v_idx + 4] = 1
-        // idxes[v_idx + 5] = 2
-
         idxes[v_idx + 3] = p_idx[1];
         idxes[v_idx + 4] = p_idx[2];
         idxes[v_idx + 5] = p_idx[3];

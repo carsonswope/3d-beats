@@ -43,24 +43,6 @@ class LiveDataConvert(AppBase):
 
         self.depth_cam = StdCamera()
 
-        self.obj_demo_mesh = GpuMesh(num_idxes=3, vtxes_shape=(3,))
-        self.obj_demo_mesh.idxes.cu().set(np.array([
-            0, 1, 2,
-        ], dtype=np.uint32))
-        self.obj_demo_mesh.vtx_pos.cu().set(np.array([
-            # [-0.5, -0.5, 0., 1.],
-            # [ 0.5, -0.5, 0., 1.],
-            # [ 0.5,  0.5, 0., 1.],
-            [ 0, 0, 4000., 1.],
-            [ 400, 400, 4100., 1.],
-            [ 400,  0, 3900., 1.],
-        ], dtype=np.float32))
-        self.obj_demo_mesh.vtx_color.cu().set(np.array([
-            [250, 0, 0],
-            [ 0, 250, 0],
-            [ 0,  0, 250],
-        ], dtype=np.uint8))
-        
         parser = argparse.ArgumentParser(description='Convert a realsense .bag file into training data for RDF')
         parser.add_argument('-i', '--bag_in', nargs='?', required=True, type=str, help='Path to realsense .bag input file')
         parser.add_argument('-o', '--out', nargs='?', required=True, type=str, help='Directory to save formatted date')
@@ -241,7 +223,7 @@ class LiveDataConvert(AppBase):
         self.obj_mesh.num_idxes = int(num_triangles * 3)
 
         # durr, some dummy OpenGL
-        self.fbo.bind(self.fbo_rgba, self.fbo_depth)
+        self.fbo.bind(rgba_tex = self.fbo_rgba, depth_tex = self.fbo_depth)
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
         glEnable(GL_DEPTH_TEST)
@@ -250,6 +232,9 @@ class LiveDataConvert(AppBase):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
         self.depth_cam.use()
+
+        cam_inv_tform = np.identity(4, dtype=np.float32)
+        self.depth_cam.u_mat4('cam_inv_tform', cam_inv_tform)
 
         cam_proj = rs_projection(self.FOCAL, self.DIM_X, self.DIM_Y, self.PP[0], self.PP[1], 50., 50000.)
         self.depth_cam.u_mat4('cam_proj', cam_proj)

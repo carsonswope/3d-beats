@@ -4,14 +4,23 @@ import numpy as np
 import cv2
 import argparse
 import imgui
+import glm
+import engine.glm_np as glm_np
 
 from decision_tree import *
 from cuda.points_ops import *
 from calibrated_plane import *
-from engine.texture import GpuTexture
 
 from engine.window import AppBase
 from engine.buffer import GpuBuffer
+from engine.texture import GpuTexture
+from engine.mesh import GpuMesh
+from engine.framebuffer import GpuFramebuffer
+from camera.std_camera import StdCamera
+
+from camera.arcball import ArcBallCam
+
+from util import MAX_UINT16, rs_projection
 
 class PoseFitApp(AppBase):
     def __init__(self):
@@ -70,7 +79,7 @@ class PoseFitApp(AppBase):
         self.labels_image_rgba_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
         self.NUM_FRAMES = 10
-        self.frame_num = 0
+        self.frame_num = 3
 
         self.depth_images = []
 
@@ -81,18 +90,30 @@ class PoseFitApp(AppBase):
             depth_image = np.asanyarray(depth_frame.get_data()).reshape((1, self.DIM_Y, self.DIM_X))
             self.depth_images.append(depth_image)
 
+        self.depth_cam = StdCamera()
+
+        self.obj_mesh = GpuMesh(
+            num_idxes = (self.DIM_X - 1) * (self.DIM_Y - 1) * 6,
+            vtxes_shape = (self.DIM_Y, self.DIM_X))
+
+        self.fbo = GpuFramebuffer((self.DIM_X, self.DIM_Y))
+        self.fbo_rgba = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
+
+        self.arc_ball = ArcBallCam()
+        self.obj_xyz = [0., 0., 0.]
 
     def splash(self):
         imgui.text('loading...')
 
     def tick(self, t):
         
-        # Convert images to numpy arrays
-        # depth_image = np.asanyarray(depth_frame.get_data()).reshape((1, self.DIM_Y, self.DIM_X))
+        # load depth image
         self.depth_image_gpu.cu().set(self.depth_images[self.frame_num])
 
         grid_dim = (1, (self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1)
         block_dim = (1,32,32)
+
+        self.pts_gpu.cu().fill(np.float32(0))
 
         # convert depth image to points
         self.points_ops.deproject_points(
@@ -132,7 +153,7 @@ class PoseFitApp(AppBase):
             grid=grid_dim2,
             block=block_dim2)
 
-        self.labels_image_gpu.cu().fill(np.uint16(65535))
+        self.labels_image_gpu.cu().fill(MAX_UINT16)
         self.decision_tree_evaluator.get_labels_forest(self.forest, self.depth_image_gpu.cu(), self.labels_image_gpu.cu())
 
         # unmap from cuda.. isn't actually necessary, but just to make sure..
@@ -140,15 +161,44 @@ class PoseFitApp(AppBase):
 
         labels_image_cpu = self.labels_image_gpu.cu().get()
         labels_image_cpu_rgba = self.data_config.convert_ids_to_colors(labels_image_cpu).reshape((480, 848, 4))
+        labels_image_cpu_rgba = labels_image_cpu_rgba[:,:,0:3] # convert to 3 channels!
 
         # generate mesh for 3d rendering!
-        
+        self.obj_mesh.vtx_color.cu().set(labels_image_cpu_rgba)
+        self.obj_mesh.vtx_pos.cu().set(self.pts_gpu.cu())
+        num_triangles = self.points_ops.make_triangles(self.DIM_X, self.DIM_Y, self.obj_mesh.vtx_pos, self.obj_mesh.idxes)
+        self.obj_mesh.num_idxes = int(num_triangles * 3)
 
+        self.fbo.bind(rgba_tex=self.fbo_rgba)
 
-        self.labels_image_rgba_tex.set(labels_image_cpu_rgba)
+        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
+        glEnable(GL_DEPTH_TEST)
+
+        glClearColor(.5, .5, .5, 1.)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+
+        self.depth_cam.use()
+        cam_proj = rs_projection(self.FOCAL, self.DIM_X, self.DIM_Y, self.PP[0], self.PP[1], 50., 50000.)
+        self.depth_cam.u_mat4('cam_proj', cam_proj)
+
+        cam_inv_tform = self.arc_ball.get_cam_inv_tform()
+        self.depth_cam.u_mat4('cam_inv_tform', cam_inv_tform)
+
+        obj_tform = glm_np.translate((self.obj_xyz[0], self.obj_xyz[1], self.obj_xyz[2],))
+        self.depth_cam.u_mat4('obj_tform', obj_tform)
+
+        self.obj_mesh.draw()
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
         _, self.frame_num = imgui.slider_int("f", self.frame_num, 0, self.NUM_FRAMES - 1)
-        imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 2, self.DIM_Y * 2)
+
+        self.arc_ball.draw_control_gui()
+        _, self.obj_xyz[0] = imgui.slider_float("obj x", self.obj_xyz[0], -2000, 2000)
+        _, self.obj_xyz[1] = imgui.slider_float("obj y", self.obj_xyz[1], -2000, 2000)
+        _, self.obj_xyz[2] = imgui.slider_float("obj z", self.obj_xyz[2], -2000, 2000)
+
+        imgui.image(self.fbo_rgba.gl(), self.DIM_X * 2, self.DIM_Y * 2)
 
 
 if __name__ == '__main__':
