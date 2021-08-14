@@ -144,17 +144,17 @@ class LiveDataConvert(AppBase):
         self.labels_image = np.zeros((self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
         self.color_image_rgba = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
-        self.color_image_rgba_gpu = GpuTexture((self.DIM_X, self.DIM_Y), GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE)
+        self.color_image_rgba_gpu = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
         # Streaming loop
         self.frame_count = 0
 
         self.fbo = GpuFramebuffer((self.DIM_X, self.DIM_Y))
 
-        self.fbo_rgba = GpuTexture((self.DIM_X, self.DIM_Y), GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE)
-        self.fbo_depth = GpuTexture((self.DIM_X, self.DIM_Y), GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT)
+        self.fbo_rgba = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
+        self.fbo_depth = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RED_INTEGER, GL_UNSIGNED_SHORT))
 
-        self.fbo_rgb_2 = GpuTexture((self.DIM_X, self.DIM_Y), GL_RGB, GL_RGB, GL_UNSIGNED_BYTE)
+        self.fbo_rgb_2 = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGB, GL_UNSIGNED_BYTE))
 
 
     # def make_modified
@@ -254,23 +254,30 @@ class LiveDataConvert(AppBase):
         cam_proj = rs_projection(self.FOCAL, self.DIM_X, self.DIM_Y, self.PP[0], self.PP[1], 50., 50000.)
         self.depth_cam.u_mat4('cam_proj', cam_proj)
 
-        SCALE_VARIANCE = 0.1
-        ROTATE_VARIANCE = 0.01
-        TRANSLATE_VARIANCE = 50
-        tform_scale = np.random.default_rng().normal(1., SCALE_VARIANCE, 3)
-        tform_rotate = np.random.default_rng().normal(0., ROTATE_VARIANCE, 3)
+        # dont randomly transform 1st frame.
+        if self.frame_count > 2:
+            SCALE_VARIANCE = 0.2
+            SCALE_SKEW_VARIANCE = 0.06
+            ROTATE_VARIANCE = 0.3
+            TRANSLATE_VARIANCE = 150
+        else:
+            SCALE_VARIANCE = 0
+            SCALE_SKEW_VARIANCE = 0
+            ROTATE_VARIANCE = 0
+            TRANSLATE_VARIANCE = 0
+        tform_scale = np.random.default_rng().normal(1, SCALE_VARIANCE, 1)[0]
+        tform_skew = np.random.default_rng().normal(0, SCALE_SKEW_VARIANCE, 3)
+        tform_rotate = np.random.default_rng().normal(0., ROTATE_VARIANCE, 1)[0]
         tform_translate = np.random.default_rng().normal(0., TRANSLATE_VARIANCE, 3)
 
-        # obj_tform = np.identity(4, dtype=np.float32)
+        # convert to plane space -> subtract mean -> random transform -> re-add mean -> convert back to camera space
         obj_tform = np.linalg.inv(self.calibrated_plane.plane) @ \
             np.array(glm.translate(glm.mat4(), glm.vec3( vtx_center[0],  vtx_center[1],  vtx_center[2]))) @ \
             np.array(glm.translate(glm.mat4(), glm.vec3(tform_translate[0], tform_translate[1], tform_translate[2]))) @ \
-            np.array(glm.rotate(glm.mat4(), tform_rotate[2], glm.vec3(0., 0., 1.))) @ \
-            np.array(glm.rotate(glm.mat4(), tform_rotate[1], glm.vec3(0., 1., 0.))) @ \
-            np.array(glm.rotate(glm.mat4(), tform_rotate[0], glm.vec3(1., 0., 0.))) @ \
-            np.array(glm.scale(glm.mat4(), glm.vec3(tform_scale[0], tform_scale[1], tform_scale[2]))) @ \
+            np.array(glm.scale(glm.mat4(), glm.vec3(tform_scale + tform_skew[0], tform_scale + tform_skew[1], tform_scale + tform_skew[2]))) @ \
             np.array(glm.translate(glm.mat4(), glm.vec3(-vtx_center[0], -vtx_center[1], -vtx_center[2]))) @ \
-            self.calibrated_plane.plane
+            self.calibrated_plane.plane @ \
+            np.array(glm.rotate(glm.mat4(), tform_rotate, glm.vec3(0., 0., 1.)))
         self.depth_cam.u_mat4('obj_tform', obj_tform)
 
         self.obj_mesh.draw()
@@ -278,19 +285,14 @@ class LiveDataConvert(AppBase):
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
-        # TODO: more efficient copy from framebuffer to cuda array
-
-        glBindTexture(GL_TEXTURE_2D, self.fbo_rgba.gl())
-        rgb_rendered = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
-        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, array=rgb_rendered)
+        # TODO: implement more efficient copy from (opengl) texture to (cuda) array buffer.
+        # going through CPU is just silly
+        rgb_rendered = self.fbo_rgba.get()
         rgb_rendered = rgb_rendered[:,:,0:3]
         self.obj_mesh.vtx_color.cu().set(rgb_rendered)
 
-        glBindTexture(GL_TEXTURE_2D, self.fbo_depth.gl())
-        rgb_depth_rendered = np.zeros((self.DIM_Y, self.DIM_X), dtype=np.uint16)
-        glGetTexImage(GL_TEXTURE_2D, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, array=rgb_depth_rendered)
+        rgb_depth_rendered = self.fbo_depth.get()
         self.depth_gpu.cu().set(rgb_depth_rendered)
-        # self.fbo_depth.copy_to_gpu_buffer(self.depth_gpu)
     
     def finish(self):
         glfw.set_window_should_close(self.window, True)
@@ -472,8 +474,7 @@ class LiveDataConvert(AppBase):
         depth_rgba_np[active_coords[0], active_coords[1], 3] = 255
         Image.fromarray(depth_rgba_np).save(f'{self.OUT_PATH}/{str(self.frame_count - 1).zfill(8)}_depth_rgba.png')
 
-        glBindTexture(GL_TEXTURE_2D, self.color_image_rgba_gpu.gl())
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.DIM_X, self.DIM_Y, GL_RGBA, GL_UNSIGNED_BYTE, self.color_image_rgba)
+        self.color_image_rgba_gpu.set(self.color_image_rgba)
 
         imgui.text('image below')
         # poor mans dpi for now..

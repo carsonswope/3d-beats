@@ -13,14 +13,14 @@ from engine.texture import GpuTexture
 from engine.window import AppBase
 from engine.buffer import GpuBuffer
 
-class RunLiveApp(AppBase):
+class PoseFitApp(AppBase):
     def __init__(self):
-        super().__init__(title="Test-icles")
+        super().__init__(title="Test-icles", width=1600, height=1250)
 
         parser = argparse.ArgumentParser(description='Train a classifier RDF for depth images')
         parser.add_argument('-m', '--model', nargs='?', required=True, type=str, help='Path to .npy model input file')
         parser.add_argument('-d', '--data', nargs='?', required=True, type=str, help='Directory holding data')
-        parser.add_argument('--rs_bag', nargs='?', required=False, type=str, help='Path to optional input realsense .bag file to use instead of live camera stream')
+        parser.add_argument('--rs_bag', nargs='?', required=True, type=str, help='Path to input realsense .bag file to use')
         parser.add_argument('--plane_num_iterations', nargs='?', required=False, type=int, help='Num random planes to propose looking for best fit')
         parser.add_argument('--plane_z_threshold', nargs='?', required=True, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
         args = parser.parse_args()
@@ -47,24 +47,12 @@ class RunLiveApp(AppBase):
         self.pipeline = rs.pipeline()
         self.config = rs.config()
 
-        if RS_BAG:
-            self.config.enable_device_from_file(RS_BAG, repeat_playback=True)
-            self.config.enable_stream(rs.stream.depth, rs.format.z16)
-            self.config.enable_stream(rs.stream.color, rs.format.rgb8)
-
-        else:
-            # Get device product line for setting a supporting resolution
-            pipeline_wrapper = rs.pipeline_wrapper(self.pipeline)
-            pipeline_profile = self.config.resolve(pipeline_wrapper)
-            device = pipeline_profile.get_device()
-            device_config_json = open('hand_config.json', 'r').read()
-            rs.rs400_advanced_mode(device).load_json(device_config_json)
-            device.first_depth_sensor().set_option(rs.option.depth_units, 0.0001)
-            self.config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 90)
+        self.config.enable_device_from_file(RS_BAG, repeat_playback=False)
+        self.config.enable_stream(rs.stream.depth, rs.format.z16)
+        self.config.enable_stream(rs.stream.color, rs.format.rgb8)
 
         profile = self.pipeline.start(self.config)
-        if RS_BAG:
-            profile.get_device().as_playback().set_real_time(False)
+        profile.get_device().as_playback().set_real_time(False)
         depth_profile = profile.get_stream(rs.stream.depth).as_video_stream_profile()
         depth_intrin = depth_profile.get_intrinsics()
 
@@ -81,30 +69,27 @@ class RunLiveApp(AppBase):
 
         self.labels_image_rgba_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
+        self.NUM_FRAMES = 10
         self.frame_num = 0
+
+        self.depth_images = []
+
+        for i in range(self.NUM_FRAMES):
+            frames = self.pipeline.wait_for_frames()
+            depth_frame = frames.get_depth_frame()
+
+            depth_image = np.asanyarray(depth_frame.get_data()).reshape((1, self.DIM_Y, self.DIM_X))
+            self.depth_images.append(depth_image)
+
 
     def splash(self):
         imgui.text('loading...')
 
     def tick(self, t):
         
-        # Wait for a coherent pair of frames: depth and color
-        frames = self.pipeline.wait_for_frames()
-        depth_frame = frames.get_depth_frame()
-
-        if not depth_frame:
-            imgui.text('no depth frame!')
-            return
-
-        # let camera stabilize for a few frames
-        elif self.frame_num < 15:
-            imgui.text('loading... ...')
-            self.frame_num += 1
-            return
-
         # Convert images to numpy arrays
-        depth_image = np.asanyarray(depth_frame.get_data()).reshape((1, self.DIM_Y, self.DIM_X))
-        self.depth_image_gpu.cu().set(depth_image)
+        # depth_image = np.asanyarray(depth_frame.get_data()).reshape((1, self.DIM_Y, self.DIM_X))
+        self.depth_image_gpu.cu().set(self.depth_images[self.frame_num])
 
         grid_dim = (1, (self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1)
         block_dim = (1,32,32)
@@ -153,18 +138,19 @@ class RunLiveApp(AppBase):
         # unmap from cuda.. isn't actually necessary, but just to make sure..
         self.depth_image_gpu.gl()
 
-        # final steps: these are slow.
-        # can be polished if/when necessary
         labels_image_cpu = self.labels_image_gpu.cu().get()
         labels_image_cpu_rgba = self.data_config.convert_ids_to_colors(labels_image_cpu).reshape((480, 848, 4))
 
+        # generate mesh for 3d rendering!
+        
+
+
         self.labels_image_rgba_tex.set(labels_image_cpu_rgba)
 
-        self.frame_num += 1
-
-        imgui.text("f: " + str(self.frame_num))
+        _, self.frame_num = imgui.slider_int("f", self.frame_num, 0, self.NUM_FRAMES - 1)
         imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 2, self.DIM_Y * 2)
 
+
 if __name__ == '__main__':
-    a = RunLiveApp()
+    a = PoseFitApp()
     a.run()

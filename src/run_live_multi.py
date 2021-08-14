@@ -23,7 +23,7 @@ from engine.buffer import GpuBuffer
 
 class RunLiveMultiApp(AppBase):
     def __init__(self):
-        super().__init__(title="Test-icles")
+        super().__init__(title="Test-icles", width=1920, height=1500)
 
         parser = argparse.ArgumentParser(description='Train a classifier RDF for depth images')
         parser.add_argument('-m0', '--model0', nargs='?', required=True, type=str, help='Path to .npy model input file for arm/hand/fingers/thumb')
@@ -152,6 +152,10 @@ class RunLiveMultiApp(AppBase):
         ], dtype=np.int32)
         self.labels_conditions_cu = cu_array.to_gpu(labels_conditions)
         self.NUM_COMPOSITE_CLASSES = 15 # 1-15
+
+        self.fingertip_idxes = [5, 8, 11, 14]
+        self.MAX_FINGERTIP_POSITIONS = 50
+        self.fingertip_positions = {i:[] for i in self.fingertip_idxes}
 
         labels_colors = np.array([
             # arm
@@ -302,7 +306,7 @@ class RunLiveMultiApp(AppBase):
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.DIM_X, self.DIM_Y, GL_RGBA, GL_UNSIGNED_BYTE, self.labels_image_rgba_cpu)
 
         imgui.text('running!')
-        imgui.image(self.labels_image_rgba_tex, self.DIM_X * 2, self.DIM_Y * 2)
+        imgui.image(self.labels_image_rgba_tex, self.DIM_X * 1.2, self.DIM_Y * 1.2)
 
         self.frame_num += 1
 
