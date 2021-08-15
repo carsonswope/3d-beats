@@ -4,7 +4,6 @@ import numpy as np
 import cv2
 import argparse
 import imgui
-import glm
 import engine.glm_np as glm_np
 
 from decision_tree import *
@@ -18,13 +17,15 @@ from engine.mesh import GpuMesh
 from engine.framebuffer import GpuFramebuffer
 from camera.std_camera import StdCamera
 
+from engine.mesh_primitives import make_cylinder
+
 from camera.arcball import ArcBallCam
 
 from util import MAX_UINT16, rs_projection
 
 class PoseFitApp(AppBase):
     def __init__(self):
-        super().__init__(title="Test-icles", width=1600, height=1250)
+        super().__init__(title="Test-icles", width=1800, height=1450)
 
         parser = argparse.ArgumentParser(description='Train a classifier RDF for depth images')
         parser.add_argument('-m', '--model', nargs='?', required=True, type=str, help='Path to .npy model input file')
@@ -78,17 +79,21 @@ class PoseFitApp(AppBase):
 
         self.labels_image_rgba_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
-        self.NUM_FRAMES = 10
+        # why cant load all the frames?? seems to block at 64
+        self.NUM_FRAMES = 0
         self.frame_num = 3
 
         self.depth_images = []
 
-        for i in range(self.NUM_FRAMES):
-            frames = self.pipeline.wait_for_frames()
-            depth_frame = frames.get_depth_frame()
+        while True:
+            frame_present, frames = self.pipeline.try_wait_for_frames()
+            if not frame_present:
+                break
 
+            depth_frame = frames.get_depth_frame()
             depth_image = np.asanyarray(depth_frame.get_data()).reshape((1, self.DIM_Y, self.DIM_X))
             self.depth_images.append(depth_image)
+            self.NUM_FRAMES += 1
 
         self.depth_cam = StdCamera()
 
@@ -101,6 +106,8 @@ class PoseFitApp(AppBase):
 
         self.arc_ball = ArcBallCam()
         self.obj_xyz = [0., 0., 0.]
+
+        self.cylinder_mesh = make_cylinder(num_sections=16)
 
     def splash(self):
         imgui.text('loading...')
@@ -174,7 +181,7 @@ class PoseFitApp(AppBase):
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
         glEnable(GL_DEPTH_TEST)
 
-        glClearColor(.5, .5, .5, 1.)
+        glClearColor(.1, .15, .15, 1.)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
         self.depth_cam.use()
@@ -188,6 +195,11 @@ class PoseFitApp(AppBase):
         self.depth_cam.u_mat4('obj_tform', obj_tform)
 
         self.obj_mesh.draw()
+
+        cyl_tform = glm_np.scale((100, 100, 300))
+        self.depth_cam.u_mat4('obj_tform', cyl_tform)
+
+        self.cylinder_mesh.draw()
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
 

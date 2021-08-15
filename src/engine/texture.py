@@ -5,6 +5,8 @@ import pycuda.gpuarray as cu_array
 
 import numpy as np
 
+from engine.buffer import GpuBuffer
+
 # Texture object holding OpenGL & CUDA interop texture.
 
 TEX_FORMAT = {
@@ -58,6 +60,24 @@ class GpuTexture:
         if return_b:
             return b
     
+    def copy_to_gpu_buffer(self, b: GpuBuffer, offset=0, format=None):
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, b.gl())
+        glBindTexture(GL_TEXTURE_2D, self.gl())
+
+        # allow format override. for example, if texture object is RGBA but only want RGB, can specify format=GL_RGB
+        if format is None:
+            format = self.format
+
+        # array arg treated as byte offset into buffer object, because GL_PIXEL_PACK_BUFFER is bound
+        glGetTexImage(GL_TEXTURE_2D, 0, format, self.dtype, array=offset, outputType=None)
+
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+        glBindTexture(GL_TEXTURE_2D, 0)
+
+    def copy_from_gpu_buffer(self, b: GpuBuffer):
+        # similar to abov function, but bind GL_PIXEL_UNPACK_BUFFER
+        raise 'Not implemented'
+
     def assert_dims_match(self, b: np.array):
         assert b.dtype == self.np_dtype, 'datatypes dont match'
 

@@ -8,3 +8,6 @@ def translate(v):
 
 def rotate(axis, r):
     return np.array(glm.rotate(glm.mat4(), r, (axis[0], axis[1], axis[2])))
+
+def scale(s):
+    return np.array(glm.scale(glm.mat4(), (s[0], s[1], s[2])))

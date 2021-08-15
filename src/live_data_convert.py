@@ -267,17 +267,10 @@ class LiveDataConvert(AppBase):
 
         self.obj_mesh.draw()
 
-
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
-        # TODO: implement more efficient copy from (opengl) texture to (cuda) array buffer.
-        # going through CPU is just silly
-        rgb_rendered = self.fbo_rgba.get()
-        rgb_rendered = rgb_rendered[:,:,0:3]
-        self.obj_mesh.vtx_color.cu().set(rgb_rendered)
-
-        rgb_depth_rendered = self.fbo_depth.get()
-        self.depth_gpu.cu().set(rgb_depth_rendered)
+        self.fbo_rgba.copy_to_gpu_buffer(self.obj_mesh.vtx_color, format=GL_RGB) # copy only RGB instead of RGBA
+        self.fbo_depth.copy_to_gpu_buffer(self.depth_gpu)
     
     def finish(self):
         glfw.set_window_should_close(self.window, True)
