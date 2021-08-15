@@ -2,6 +2,8 @@ from OpenGL.GL import *
 from OpenGL.GL import shaders
 from OpenGL.raw.GL.VERSION.GL_2_0 import GL_FRAGMENT_SHADER, GL_VERTEX_SHADER
 
+import numpy as np
+
 class StdCamera:
     def __init__(self):
         vs_text = open('./src/camera/std_camera.vert', 'r').read()
@@ -20,9 +22,20 @@ class StdCamera:
     def use(self):
         shaders.glUseProgram(self._program)
 
-    # def uniformMatrix4fv(self, name, )
     def u_pos(self, name):
         return glGetUniformLocation(self._program, name)
+
+    def u_1ui(self, name, v):
+        self.use()
+        glUniform1ui(self.u_pos(name), np.uint(v))
+    
+    def u_4ui(self, name, v):
+        self.use()
+        glUniform4uiv(self.u_pos(name), 1, v)
+
+    def u_4f(self, name, v):
+        self.use()
+        glUniform4fv(self.u_pos(name), 1, v)
 
     def u_mat4(self, name, m):
         self.use()

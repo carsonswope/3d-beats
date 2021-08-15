@@ -2,7 +2,7 @@ from OpenGL.GL import *
 from engine.mesh import GpuMesh
 import numpy as np
 
-def make_cylinder(num_sections=8, fill_ends=False):
+def make_cylinder(num_sections=8):
 
     vtx_pos = []
     vtx_col = []
