@@ -1,15 +1,16 @@
 Using random decision forests to identify hand pixels!
 
 # Random forests!
-This is an implementation of depth image pixel classification via random forests, as outlined in *Real-Time Human Pose Recognition in Parts from Single Depth Images* (look in docs).
+This is an implementation of depth image pixel classification via random forests, as outlined in *Real-Time Human Pose Recognition in Parts from Single Depth Images* (look in docs). This is the technique uesd by the Microsoft Kinect team to train their human pose estimation model.
 
-# Data generation:
-Inside the `datagen` folder, there is a `.blend` (blender) scene set up. It contains a python script that can be run to generate a bunch of fake data.
-The original hand model is downloaded from: https://www.youtube.com/watch?v=PW5dJVQe83U
+One major difference is that they trained their model on synthetic data, but I'm training the model using real recordings of my hand, with skin paint to label different sections.
+
+This is still a work in process, but here's a gif of the classifier in action:
+
+![Hand Classifier](rdf.gif)
 
 # TODOs:
 
 - auto-tuning of plane / z threshold. should be able to determine best z threshold automatically
 - random scaling/noise/etc. added to input data for more robustness
-- smoothing of generated input labels data so as to improve quality of training data
 - add thumb sections to multi-level RDF architecture
