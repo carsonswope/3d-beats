@@ -71,18 +71,20 @@ class CylinderTform():
 
     def make_random(self):
         n = self.copy()
-        _a = [n.t, n.r, n.s]
-        _v = [25., 0.2, 5.]
 
         a = np.random.randint(3)
-        b = np.random.randint(3)
-
-        _a[a][b] = _a[a][b] + np.random.normal(0., _v[a])
+        if a  == 0: # translation
+            b = np.random.randint(3)
+            n.t[b] = np.random.normal(n.t[b], 25.)
+        elif a == 1: # rotation
+            b = np.random.choice([0, 2]) # only rotate x & z axes
+            n.r[b] = np.random.normal(n.r[b], 0.1)
+        elif a == 2: # scale
+            b = np.random.normal(n.s[0], 5.)
+            n.s[0] = b * 1.3
+            n.s[1] = b
 
         return n
-        # if a == 0:
-            
-        
 
 
 class PoseFitApp(AppBase):
@@ -178,12 +180,8 @@ class PoseFitApp(AppBase):
 
         self.cylinder_mesh = make_cylinder(num_sections=16)
 
-        # self.cylinder_tform_params = np.zeros((3,3), dtype=np.float32)
         self.cylinder_tform = CylinderTform()
-
-        # self.cylinder_scale = 
-        # self.cylinder_translate = np.zeros(3)
-        # self.cylinder_rotate = np.zeros(3, dtype=np.float32) # only x and z will rotate for cylinder!
+        self.next_cylinder_tform = None
 
         mean_shift_variances = np.array([100., 100., 100., 100.,], dtype=np.float32)
         self.mean_shift_variances_cu = GpuBuffer((4,), dtype=np.float32)
@@ -252,8 +250,11 @@ class PoseFitApp(AppBase):
         # unmap from cuda.. isn't actually necessary, but just to make sure..
         self.depth_image_gpu.gl()
 
+        if self.next_cylinder_tform is not None:
+            test_tform = self.next_cylinder_tform
+
         # if cylinder tform hasnt been set yet (at 0 z coordinate, silly way to check)
-        if self.cylinder_tform.t[2] < 0.1 and self.cylinder_tform.t[2] > -0.1:
+        elif self.cylinder_tform.t[2] < 0.1 and self.cylinder_tform.t[2] > -0.1:
 
             label_means = self.mean_shift.run(
                 6, # iterations to run for mean shift
@@ -272,7 +273,7 @@ class PoseFitApp(AppBase):
 
             self.cylinder_tform.t[:] = l_point[0:3]
             self.cylinder_tform.r[:] = [0., 0., 0.]
-            self.cylinder_tform.s[:] = [200., 200., 500.]
+            self.cylinder_tform.s[:] = [200. * 1.3, 200., 800.]
 
             test_tform = self.cylinder_tform
         
@@ -340,7 +341,7 @@ class PoseFitApp(AppBase):
         self.depth_cam.u_1ui('color_mode', 0)
         self.depth_cam.u_4f('solid_color', np.array([1., 0., 1., 1.], dtype=np.float32))
 
-        cam_inv_tform = self.arc_ball.get_cam_inv_tform()
+        cam_inv_tform = self.arc_ball.get_cam_inv_tform() @ glm_np.translate(-self.cylinder_tform.t)
         self.depth_cam.u_mat4('cam_inv_tform', cam_inv_tform)
 
         obj_tform = np.identity(4, dtype=np.float32)
@@ -350,7 +351,7 @@ class PoseFitApp(AppBase):
 
         self.depth_cam.u_1ui('color_mode', 1)
 
-        self.depth_cam.u_mat4('obj_tform', cyl_tform)
+        self.depth_cam.u_mat4('obj_tform', self.cylinder_tform.get_tform())
 
         self.cylinder_mesh.draw()
 
@@ -359,12 +360,11 @@ class PoseFitApp(AppBase):
         frame_num_changed, self.frame_num = imgui.slider_int("f", self.frame_num, 0, self.NUM_FRAMES - 1)
         if frame_num_changed:
             self.best_cost = np.inf
-
+            self.next_cylinder_tform = self.cylinder_tform
+        else:
+            self.next_cylinder_tform = None
 
         self.arc_ball.draw_control_gui()
-        # _, self.cylinder_translate[0] = imgui.slider_float("obj x", self.cylinder_translate[0], -2000, 2000)
-        # _, self.cylinder_translate[1] = imgui.slider_float("obj y", self.cylinder_translate[1], -2000, 2000)
-        # _, self.cylinder_translate[2] = imgui.slider_float("obj z", self.cylinder_translate[2], -2000, 2000)
 
         imgui.text(f'cost: {self.best_cost}')
 
