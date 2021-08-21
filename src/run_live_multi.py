@@ -17,6 +17,7 @@ import argparse
 
 import imgui
 
+import rtmidi
 
 from engine.window import AppBase
 from engine.buffer import GpuBuffer
@@ -35,12 +36,22 @@ class RunLiveMultiApp(AppBase):
         parser.add_argument('--plane_z_threshold', nargs='?', required=True, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
         args = parser.parse_args()
 
+
+        self.midi_out = rtmidi.MidiOut()
+        # available_ports = self.midi_out.get_ports()
+        self.midi_out.open_port(1) # loopbe port..
+
+        self.note_on = lambda n,v: [0x90, n, v]
+        self.note_off = lambda n: [0x80, n, 0]
+
+
         RS_BAG = args.rs_bag
 
         self.NUM_RANDOM_GUESSES = args.plane_num_iterations or 25000
         self.PLANE_Z_OUTLIER_THRESHOLD = args.plane_z_threshold
 
         self.calibrated_plane = CalibratedPlane(self.NUM_RANDOM_GUESSES, self.PLANE_Z_OUTLIER_THRESHOLD)
+        self.calibrate_next_frame = False
 
         print('loading forest')
         self.m0 = DecisionForest.load(args.model0)
@@ -154,6 +165,20 @@ class RunLiveMultiApp(AppBase):
         self.NUM_COMPOSITE_CLASSES = 15 # 1-15
 
         self.fingertip_idxes = [5, 8, 11, 14]
+        self.fingertip_thresholds = {
+            5: 145.,
+            8: 145.,
+            11: 145.,
+            14: 125.,
+        }
+        self.fingertip_notes = {
+            5: 40,
+            8: 41,
+            11: 42,
+            14: 43,
+        }
+        self.fingertip_states = {i:False for i in self.fingertip_idxes} # start off..
+        self.FINGERTIP_UP_THRESHOLD = 20.
         self.MAX_FINGERTIP_POSITIONS = 50
         self.fingertip_positions = {i:[] for i in self.fingertip_idxes}
 
@@ -184,6 +209,17 @@ class RunLiveMultiApp(AppBase):
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, self.DIM_X, self.DIM_Y, 0, GL_RGBA, GL_UNSIGNED_BYTE, None)
 
         self.frame_num = 0
+
+
+    def set_fingertip_state(self, f_idx, s):
+        note = self.fingertip_notes[f_idx]
+        if s and not self.fingertip_states[f_idx]:
+            self.fingertip_states[f_idx] = True
+            self.midi_out.send_message(self.note_on(note, 127))
+        
+        elif not s and self.fingertip_states[f_idx]:
+            self.fingertip_states[f_idx] = False
+            self.midi_out.send_message(self.note_off(note))
 
 
     def splash(self):
@@ -222,7 +258,7 @@ class RunLiveMultiApp(AppBase):
             grid=grid_dim,
             block=block_dim)
 
-        if not self.calibrated_plane.is_set() or self.frame_num % 45 == 0:
+        if not self.calibrated_plane.is_set() or self.calibrate_next_frame:
             if self.calibrated_plane.is_set():
                 # attempt to improve plane..
                 self.calibrated_plane.make(self.pts_cu, (self.DIM_X, self.DIM_Y), self.calibrated_plane.get_mat())
@@ -305,8 +341,71 @@ class RunLiveMultiApp(AppBase):
         glBindTexture(GL_TEXTURE_2D, self.labels_image_rgba_tex)
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.DIM_X, self.DIM_Y, GL_RGBA, GL_UNSIGNED_BYTE, self.labels_image_rgba_cpu)
 
+        pts_cpu = self.pts_cu.cu().get()
+
+        for f_idx in self.fingertip_idxes:
+            px, py = label_means[f_idx-1].astype(np.int)
+            if px < 0 or py < 0 or px >= self.DIM_X or py >= self.DIM_Y:
+                self.fingertip_positions[f_idx].clear()
+                self.set_fingertip_state(f_idx, False)
+            else:
+                d = pts_cpu[py, px]
+                d_z = -d[2]
+                self.fingertip_positions[f_idx].append(d_z)
+                while len(self.fingertip_positions[f_idx]) > self.MAX_FINGERTIP_POSITIONS:
+                    self.fingertip_positions[f_idx].pop(0)
+            
+                if len(self.fingertip_positions[f_idx]) > 10: # arbitrary..
+                    last_pos = self.fingertip_positions[f_idx][-1]
+                    if last_pos < self.fingertip_thresholds[f_idx]:
+                        self.set_fingertip_state(f_idx, True)
+                    else:
+                        self.set_fingertip_state(f_idx, False)
+
         imgui.text('running!')
-        imgui.image(self.labels_image_rgba_tex, self.DIM_X * 1.2, self.DIM_Y * 1.2)
+
+        if imgui.button('recalibrate'):
+            self.calibrate_next_frame = True
+        else:
+            self.calibrate_next_frame = False
+
+        for f_idx in self.fingertip_idxes:
+
+
+            if len(self.fingertip_positions[f_idx]) > 0:
+                a = np.array(self.fingertip_positions[f_idx], dtype=np.float32)
+            else:
+                a = np.array([0], dtype=np.float32)
+
+            graph_dim_x = 500.
+            graph_dim_y = 150.
+
+            graph_scale_z = 500.
+
+            cursor_pos = imgui.get_cursor_screen_pos()
+
+            imgui.plot_lines(f'f{f_idx} pos',
+                a,
+                scale_max=graph_scale_z,
+                scale_min=0.,
+                graph_size=(graph_dim_x, graph_dim_y))
+
+            f_threshold = self.fingertip_thresholds[f_idx]
+
+            if self.fingertip_states[f_idx]:
+                thresh_color = imgui.get_color_u32_rgba(0.3,1,0.8,0.30)
+            else:
+                thresh_color = imgui.get_color_u32_rgba(0.3,1,0.8,0.05)
+
+            imgui.get_window_draw_list().add_rect_filled(
+                cursor_pos[0],
+                cursor_pos[1] + (graph_dim_y * (1 - (f_threshold / graph_scale_z))),
+                cursor_pos[0] + graph_dim_x,
+                cursor_pos[1] + graph_dim_y,
+                thresh_color)
+
+
+        imgui.image(self.labels_image_rgba_tex, self.DIM_X * 1.5, self.DIM_Y * 1.5)
 
         self.frame_num += 1
 
