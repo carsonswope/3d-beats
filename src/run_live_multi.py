@@ -33,7 +33,7 @@ class RunLiveMultiApp(AppBase):
         # parser.add_argument('-d', '--data', nargs='?', required=True, type=str, help='Directory holding data')
         parser.add_argument('--rs_bag', nargs='?', required=False, type=str, help='Path to optional input realsense .bag file to use instead of live camera stream')
         parser.add_argument('--plane_num_iterations', nargs='?', required=False, type=int, help='Num random planes to propose looking for best fit')
-        parser.add_argument('--plane_z_threshold', nargs='?', required=True, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
+        # parser.add_argument('--plane_z_threshold', nargs='?', required=True, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
         args = parser.parse_args()
 
 
@@ -48,7 +48,7 @@ class RunLiveMultiApp(AppBase):
         RS_BAG = args.rs_bag
 
         self.NUM_RANDOM_GUESSES = args.plane_num_iterations or 25000
-        self.PLANE_Z_OUTLIER_THRESHOLD = args.plane_z_threshold
+        self.PLANE_Z_OUTLIER_THRESHOLD = 50.
 
         self.calibrated_plane = CalibratedPlane(self.NUM_RANDOM_GUESSES, self.PLANE_Z_OUTLIER_THRESHOLD)
         self.calibrate_next_frame = False
@@ -263,7 +263,7 @@ class RunLiveMultiApp(AppBase):
                 # attempt to improve plane..
                 self.calibrated_plane.make(self.pts_cu, (self.DIM_X, self.DIM_Y), self.calibrated_plane.get_mat())
             else:
-                # initialize plane..
+                # initialize plane for first time
                 self.calibrated_plane.make(self.pts_cu, (self.DIM_X, self.DIM_Y))
 
         # every point..
@@ -369,22 +369,27 @@ class RunLiveMultiApp(AppBase):
         else:
             self.calibrate_next_frame = False
 
-        for f_idx in self.fingertip_idxes:
+        _, self.PLANE_Z_OUTLIER_THRESHOLD = imgui.slider_float('z thresh', self.PLANE_Z_OUTLIER_THRESHOLD, 0., 100.)
 
+        c_x, c_y = imgui.get_cursor_pos()
+        graph_dim_x = 400.
+        graph_pad_x = 10.
+        graph_dim_y = 150.
+        graph_scale_z = 500.
+
+        for i, f_idx in zip(range(len(self.fingertip_idxes)), self.fingertip_idxes):
+
+            imgui.set_cursor_pos((c_x + ((graph_dim_x + graph_pad_x) * i), c_y))
 
             if len(self.fingertip_positions[f_idx]) > 0:
                 a = np.array(self.fingertip_positions[f_idx], dtype=np.float32)
             else:
                 a = np.array([0], dtype=np.float32)
 
-            graph_dim_x = 500.
-            graph_dim_y = 150.
-
-            graph_scale_z = 500.
 
             cursor_pos = imgui.get_cursor_screen_pos()
 
-            imgui.plot_lines(f'f{f_idx} pos',
+            imgui.plot_lines(f'##f{f_idx} pos',
                 a,
                 scale_max=graph_scale_z,
                 scale_min=0.,
