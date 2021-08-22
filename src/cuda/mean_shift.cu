@@ -31,8 +31,9 @@ void make_composite_labels_image(
             current_tree_offset = tree_val.y;
         }
     }
-    composite_image.set({y, x}, 10);
 
+    printf("Should not have made it to here i nmake_composite_labels_image..\n");
+    assert(false);
 }}
 
 extern "C" {__global__

@@ -49,7 +49,7 @@ class RunLiveMultiApp(AppBase):
         RS_BAG = args.rs_bag
 
         self.NUM_RANDOM_GUESSES = args.plane_num_iterations or 25000
-        self.PLANE_Z_OUTLIER_THRESHOLD = 50.
+        self.PLANE_Z_OUTLIER_THRESHOLD = 40.
 
         self.calibrated_plane = CalibratedPlane(self.NUM_RANDOM_GUESSES, self.PLANE_Z_OUTLIER_THRESHOLD)
         self.calibrate_next_frame = False
@@ -98,12 +98,13 @@ class RunLiveMultiApp(AppBase):
         self.FOCAL = depth_intrin.fx
         self.PP = np.array([depth_intrin.ppx, depth_intrin.ppy], dtype=np.float32)
         self.pts_cu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.float32)
-        self.depth_image_cu = GpuBuffer((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
+        self.depth_image_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
+        self.depth_image_cu_2 = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
-        self.labels_image0_cu = cu_array.GPUArray((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
-        self.labels_image1_cu = cu_array.GPUArray((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
-        self.labels_image2_cu = cu_array.GPUArray((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
-        self.labels_image_composite_cu = cu_array.GPUArray((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
+        self.labels_image0_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
+        self.labels_image1_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
+        self.labels_image2_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
+        self.labels_image_composite_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
         self.depth_image_rgba_gpu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
         self.depth_image_rgba_gpu_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
@@ -114,9 +115,9 @@ class RunLiveMultiApp(AppBase):
         self.mean_shift = MeanShift()
 
         self.labels_images_ptrs = cu.pagelocked_zeros((3,), dtype=np.int64)
-        self.labels_images_ptrs[0] = self.labels_image0_cu.__cuda_array_interface__['data'][0]
-        self.labels_images_ptrs[1] = self.labels_image2_cu.__cuda_array_interface__['data'][0]
-        self.labels_images_ptrs[2] = self.labels_image1_cu.__cuda_array_interface__['data'][0]
+        self.labels_images_ptrs[0] = self.labels_image0_cu.cu().__cuda_array_interface__['data'][0]
+        self.labels_images_ptrs[1] = self.labels_image2_cu.cu().__cuda_array_interface__['data'][0]
+        self.labels_images_ptrs[2] = self.labels_image1_cu.cu().__cuda_array_interface__['data'][0]
         self.labels_images_ptrs_cu = cu_array.to_gpu(self.labels_images_ptrs)
 
         mean_shift_variances = np.array([
@@ -173,16 +174,16 @@ class RunLiveMultiApp(AppBase):
 
         self.fingertip_idxes = [5, 8, 11, 14]
         self.fingertip_thresholds = {
-            5: 145.,
-            8: 145.,
-            11: 145.,
-            14: 125.,
+            5: 140.,
+            8: 140.,
+            11: 140.,
+            14: 120.,
         }
         self.fingertip_notes = {
-            5: 40,
-            8: 41,
-            11: 42,
-            14: 43,
+            5: 36,
+            8: 37,
+            11: 38,
+            14: 39,
         }
         self.fingertip_states = {i:False for i in self.fingertip_idxes} # start off..
         self.FINGERTIP_UP_THRESHOLD = 20.
@@ -210,6 +211,8 @@ class RunLiveMultiApp(AppBase):
         self.labels_image_rgba_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
         self.frame_num = 0
+
+        self.gauss_sigma = 2.5
 
 
     def set_fingertip_state(self, f_idx, s):
@@ -285,16 +288,28 @@ class RunLiveMultiApp(AppBase):
             grid=grid_dim2,
             block=block_dim2)
 
-        self.points_ops.setup_depth_image_for_forest(
+        self.points_ops.remove_missing_3d_points_from_depth_image(
             np.int32(self.DIM_X * self.DIM_Y),
             self.pts_cu.cu(),
             self.depth_image_cu.cu(),
             grid=grid_dim2,
             block=block_dim2)
 
+        self.depth_image_cu_2.cu().set(self.depth_image_cu.cu())
+        self.points_ops.gaussian_depth_filter(
+            self.depth_image_cu_2,
+            self.depth_image_cu,
+            sigma=self.gauss_sigma,
+            k_size=25)
+
+        self.points_ops.convert_0s_to_maxuint(
+            np.int32(self.DIM_X * self.DIM_Y),
+            self.depth_image_cu.cu(),
+            grid=grid_dim2,
+            block=block_dim2)
+
         self.points_ops.make_depth_rgba(
-            np.int32(self.DIM_X),
-            np.int32(self.DIM_Y),
+            np.array((self.DIM_X, self.DIM_Y), dtype=np.int32),
             np.uint16(2000),
             np.uint16(6000),
             self.depth_image_cu.cu(),
@@ -303,25 +318,26 @@ class RunLiveMultiApp(AppBase):
             block=(32, 32, 1))
         self.depth_image_rgba_gpu_tex.copy_from_gpu_buffer(self.depth_image_rgba_gpu)
 
-        self.labels_image0_cu.fill(MAX_UINT16)
-        self.labels_image1_cu.fill(MAX_UINT16)
-        self.labels_image2_cu.fill(MAX_UINT16)
-        self.labels_image_composite_cu.fill(MAX_UINT16)
+        self.labels_image0_cu.cu().fill(MAX_UINT16)
+        self.labels_image1_cu.cu().fill(MAX_UINT16)
+        self.labels_image2_cu.cu().fill(MAX_UINT16)
+        self.labels_image_composite_cu.cu().fill(MAX_UINT16)
 
-        self.decision_tree_evaluator.get_labels_forest(self.m0, self.depth_image_cu.cu(), self.labels_image0_cu)
-        self.decision_tree_evaluator.get_labels_forest(self.m1, self.depth_image_cu.cu(), self.labels_image1_cu)
-        self.decision_tree_evaluator.get_labels_forest(self.m2, self.depth_image_cu.cu(), self.labels_image2_cu)
+        depth_image_cu_reshaped = self.depth_image_cu.cu().reshape((1, self.DIM_Y, self.DIM_X))
+        self.decision_tree_evaluator.get_labels_forest(self.m0, depth_image_cu_reshaped, self.labels_image0_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
+        self.decision_tree_evaluator.get_labels_forest(self.m1, depth_image_cu_reshaped, self.labels_image1_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
+        self.decision_tree_evaluator.get_labels_forest(self.m2, depth_image_cu_reshaped, self.labels_image2_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
 
         self.mean_shift.make_composite_labels_image(
             self.labels_images_ptrs_cu,
             self.DIM_X,
             self.DIM_Y,
             self.labels_conditions_cu,
-            self.labels_image_composite_cu)
-
+            self.labels_image_composite_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
+        
         label_means = self.mean_shift.run(
             6,
-            self.labels_image_composite_cu,
+            self.labels_image_composite_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)),
             self.NUM_COMPOSITE_CLASSES,
             self.mean_shift_variances_cu)
 
@@ -331,7 +347,7 @@ class RunLiveMultiApp(AppBase):
             np.uint32(self.DIM_X),
             np.uint32(self.DIM_Y),
             np.uint32(self.NUM_COMPOSITE_CLASSES),
-            self.labels_image_composite_cu,
+            self.labels_image_composite_cu.cu(),
             self.labels_colors_cu,
             self.labels_image_rgba_cu,
             grid = ((self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1, 1),
@@ -419,7 +435,9 @@ class RunLiveMultiApp(AppBase):
                 cursor_pos[1] + graph_dim_y,
                 thresh_color)
 
-        imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X / 2, self.DIM_Y / 2)
+        _, self.gauss_sigma = imgui.slider_float('depth sgma', self.gauss_sigma, 0.1, 10.)
+
+        imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X, self.DIM_Y)
 
         imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 1.5, self.DIM_Y * 1.5)
 

@@ -115,6 +115,38 @@ void make_triangles(const int DIM_X, const int DIM_Y, uint64* triangle_count, fl
 }}
 
 extern "C" {__global__
+void convert_0s_to_maxuint(
+        int NUM_PIXELS,
+        uint16* depth) {
+
+    const int i = (blockIdx.x * blockDim.x) + threadIdx.x;
+    if (i >= NUM_PIXELS) return;
+    if (depth[i] == 0) {
+        depth[i] = MAX_UINT16;
+    }
+}}
+
+
+extern "C" {__global__
+void remove_missing_3d_points_from_depth_image(
+        int NUM_PIXELS,
+        glm::vec4* pts,
+        uint16* depth) {
+
+    const int i = (blockIdx.x * blockDim.x) + threadIdx.x;
+    if (i >= NUM_PIXELS) return;
+
+    // const uint16 d = depth[i];
+    const glm::vec4 p = pts[i];
+
+    if (p.w == 0.) {
+        depth[i] = 0;
+    }
+
+}}
+
+
+extern "C" {__global__
 void setup_depth_image_for_forest(
         int NUM_PIXELS,
         glm::vec4* pts,
@@ -249,37 +281,93 @@ void make_rgba_from_labels(
 }}
 
 extern "C" {__global__
-    void make_depth_rgba(
-            int IMG_DIM_X,
-            int IMG_DIM_Y,
-            uint16 d_min,
-            uint16 d_max,
-            uint16* _d,
-            uint8* _c) {
-        
-        const int x = (blockIdx.x * blockDim.x) + threadIdx.x;
-        const int y = (blockIdx.y * blockDim.y) + threadIdx.y;
-        if (x >= IMG_DIM_X || y >= IMG_DIM_Y) return;
+void make_depth_rgba(
+        int2 IMG_DIM,
+        uint16 d_min,
+        uint16 d_max,
+        uint16* _d,
+        uint8* _c) {
     
-        const auto d = Array2d<uint16>(_d, {IMG_DIM_Y, IMG_DIM_X}).get({y, x});
+    const int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+    const int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+    if (x >= IMG_DIM.x || y >= IMG_DIM.y) return;
 
-        Array3d<uint8> c(_c, {IMG_DIM_Y, IMG_DIM_X, 4});
+    const auto d = Array2d<uint16>(_d, {IMG_DIM.y, IMG_DIM.x}).get({y, x});
 
-        uint8 new_color[4] = {0, 0, 0, 255};
+    Array3d<uint8> c(_c, {IMG_DIM.y, IMG_DIM.x, 4});
 
-        if (d <= d_min || d >= d_max) {
-            new_color[0] = 167;
-            new_color[1] = 195;
-            new_color[2] = 162;
-        } else {
-            float n_f = ((1.0f * d - d_min) * 255.f) / (d_max - d_min);
-            auto n_uint = (uint8)__float2uint_rd(256.f - n_f);
-            new_color[0] = n_uint;
-            new_color[1] = n_uint;
-            new_color[2] = n_uint;
+    uint8 new_color[4] = {0, 0, 0, 255};
+
+    if (d == 0) {
+        new_color[0] = 195;
+        new_color[1] = 157;
+        new_color[2] = 152;
+    } else if (d == MAX_UINT16) {
+        new_color[0] = 157;
+        new_color[1] = 195;
+        new_color[2] = 152; 
+    } else if (d <= d_min || d >= d_max) {
+        new_color[0] = 157;
+        new_color[1] = 152;
+        new_color[2] = 195;
+    } else {
+        float n_f = ((1.0f * d - d_min) * 255.f) / (d_max - d_min);
+        auto n_uint = (uint8)__float2uint_rd(256.f - n_f);
+        new_color[0] = n_uint;
+        new_color[1] = n_uint;
+        new_color[2] = n_uint;
+    }
+
+    auto* c_ptr = c.get_ptr({y, x, 0});
+    memcpy(c_ptr, new_color, sizeof(uint8)*4);
+}}
+
+
+extern "C" {__global__
+void gaussian_depth_filter(
+        int2 IMG_DIM,
+        int window_size,
+        float* _k,
+        uint16* _d_in,
+        uint16* _d_out) {
+    
+    const int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+    const int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+    if (x >= IMG_DIM.x || y >= IMG_DIM.y) return;
+
+    // a depth value of d suggests 
+    auto k = Array2d<float>(_k, {window_size, window_size});
+    auto d_in = Array2d<uint16>(_d_in, {IMG_DIM.y, IMG_DIM.x});
+    auto d_out = Array2d<uint16>(_d_out, {IMG_DIM.y, IMG_DIM.x});
+
+    float w_0 = 0.f;
+    float w_non0 = 0.f;
+    float sum_non0 = 0.f;
+
+    for (int dy = 0; dy < window_size; dy++) {
+        for (int dx = 0; dx < window_size; dx++) {
+            const int2 c = {
+                x + dx - (window_size/2),
+                y + dy - (window_size/2)
+            };
+            if (c.y < 0 || c.x < 0 || c.y >= IMG_DIM.y || c.x >= IMG_DIM.x) continue;
+
+            const auto d = d_in.get({c.y, c.x});
+            const auto w = k.get({dy, dx});
+
+            if (d == 0) {
+                w_0 += w;
+            } else {
+                w_non0 += w;
+                sum_non0 += (d*w);
+            }
         }
+    }
 
-        auto* c_ptr = c.get_ptr({y, x, 0});
-        memcpy(c_ptr, new_color, sizeof(uint8)*4);
-    }}
-    
+    uint16 v = w_0 > w_non0
+        ? 0
+        : (uint16)__float2uint_rd(sum_non0 / w_non0);
+
+    d_out.set({y, x}, v);
+
+}}
