@@ -15,9 +15,11 @@ class PointsOps():
         self.split_pixels_by_nearest_color = cu_mod.get_function('split_pixels_by_nearest_color')
         self.make_rgba_from_labels = cu_mod.get_function('make_rgba_from_labels')
 
+        self.make_depth_rgba = cu_mod.get_function('make_depth_rgba')
+
         self._make_triangles = cu_mod.get_function('make_triangles')
         self._triangle_count = GpuBuffer((1,), dtype=np.uint64)
-        # self._triangle_count = PagelockedCounter()
+
     
     # returns num triangles!
     def make_triangles(self, DIM_X, DIM_Y, pts: GpuBuffer, idxes: GpuBuffer):

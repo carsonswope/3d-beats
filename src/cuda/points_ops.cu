@@ -247,3 +247,39 @@ void make_rgba_from_labels(
     auto* color_ptr = colors.get_ptr({l - 1, 0});
     memcpy(color_img_ptr, color_ptr, sizeof(uint8) * 4); // should evaluate to just 4 bytes..
 }}
+
+extern "C" {__global__
+    void make_depth_rgba(
+            int IMG_DIM_X,
+            int IMG_DIM_Y,
+            uint16 d_min,
+            uint16 d_max,
+            uint16* _d,
+            uint8* _c) {
+        
+        const int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+        const int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+        if (x >= IMG_DIM_X || y >= IMG_DIM_Y) return;
+    
+        const auto d = Array2d<uint16>(_d, {IMG_DIM_Y, IMG_DIM_X}).get({y, x});
+
+        Array3d<uint8> c(_c, {IMG_DIM_Y, IMG_DIM_X, 4});
+
+        uint8 new_color[4] = {0, 0, 0, 255};
+
+        if (d <= d_min || d >= d_max) {
+            new_color[0] = 167;
+            new_color[1] = 195;
+            new_color[2] = 162;
+        } else {
+            float n_f = ((1.0f * d - d_min) * 255.f) / (d_max - d_min);
+            auto n_uint = (uint8)__float2uint_rd(256.f - n_f);
+            new_color[0] = n_uint;
+            new_color[1] = n_uint;
+            new_color[2] = n_uint;
+        }
+
+        auto* c_ptr = c.get_ptr({y, x, 0});
+        memcpy(c_ptr, new_color, sizeof(uint8)*4);
+    }}
+    

@@ -24,6 +24,10 @@ class GpuTexture:
         self.format, self.dtype = format_dtype
         self.internal_format, self.num_components, self.np_dtype = TEX_FORMAT[format_dtype]
 
+        self.np_dims = (self.dims[1], self.dims[0])
+        if self.num_components > 1:
+            self.np_dims = self.np_dims + (self.num_components,)
+
         self._gl = glGenTextures(1)
 
         glBindTexture(GL_TEXTURE_2D, self._gl)
@@ -43,13 +47,11 @@ class GpuTexture:
         glBindTexture(GL_TEXTURE_2D, self.gl())
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.dims[0], self.dims[1], self.format, self.dtype, b)
 
+
     def get(self, b=None):
         if b == None:
             return_b = True
-            d = (self.dims[1], self.dims[0])
-            if self.num_components > 1:
-                d = d + (self.num_components,)
-            b = np.zeros(d, dtype=self.np_dtype)
+            b = np.zeros(self.np_dims, dtype=self.np_dtype)
         else:
             return_b = False
         self.assert_dims_match(b)
@@ -75,14 +77,16 @@ class GpuTexture:
         glBindTexture(GL_TEXTURE_2D, 0)
 
     def copy_from_gpu_buffer(self, b: GpuBuffer):
-        # similar to abov function, but bind GL_PIXEL_UNPACK_BUFFER
-        raise 'Not implemented'
+
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, b.gl())
+        glBindTexture(GL_TEXTURE_2D, self.gl())
+
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.dims[0], self.dims[1], self.format, self.dtype, None)
+
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
+        glBindTexture(GL_TEXTURE_2D, 0)
+
 
     def assert_dims_match(self, b: np.array):
         assert b.dtype == self.np_dtype, 'datatypes dont match'
-
-        if self.num_components > 1:
-            assert (self.dims[1], self.dims[0], self.num_components) == b.shape
-        else:
-            assert (self.dims[1], self.dims[0]) == b.shape
-
+        assert b.shape == self.np_dims, 'shape dims dont match'

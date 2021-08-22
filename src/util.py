@@ -17,6 +17,15 @@ def rs_projection(f, w, h, ppx, ppy, zmin, zmax):
         [0, 0, 2*zmax*zmin/(zmin-zmax), 0]
     ], dtype=np.float32).T
 
+def make_grid(dims, block_dims):
+    assert len(dims) == 3
+    assert len(block_dims) == 3
+    r = lambda a,b: -(-a // b)
+    return (
+        r(dims[0], block_dims[0]),
+        r(dims[1], block_dims[1]),
+        r(dims[2], block_dims[2]))
+
 class PagelockedCounter:
     def __init__(self):
         self.d = cu.pagelocked_zeros((1,), np.int64)
@@ -24,11 +33,7 @@ class PagelockedCounter:
     @property
     def __array_interface__(self):
         return self.d.__array_interface__
-    
-    # @property
-    # def ptr(self):
-        # return self.d.__array_interface__['data'][0]
-    
+
     def set(self, new_count):
         self.d[0] = new_count
 

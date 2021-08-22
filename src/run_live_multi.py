@@ -11,7 +11,9 @@ from decision_tree import *
 from cuda.points_ops import *
 from calibrated_plane import *
 from cuda.mean_shift import *
+from engine.texture import GpuTexture
 
+from util import make_grid, MAX_UINT16
 
 import argparse
 
@@ -43,7 +45,6 @@ class RunLiveMultiApp(AppBase):
 
         self.note_on = lambda n,v: [0x90, n, v]
         self.note_off = lambda n: [0x80, n, 0]
-
 
         RS_BAG = args.rs_bag
 
@@ -91,15 +92,21 @@ class RunLiveMultiApp(AppBase):
         self.DIM_X = depth_intrin.width
         self.DIM_Y = depth_intrin.height
 
+        b = (1024, 1, 1)
+        g = make_grid((self.DIM_X * self.DIM_Y, 1, 1), b)
+
         self.FOCAL = depth_intrin.fx
         self.PP = np.array([depth_intrin.ppx, depth_intrin.ppy], dtype=np.float32)
         self.pts_cu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.float32)
-        self.depth_image_cu = cu_array.GPUArray((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
+        self.depth_image_cu = GpuBuffer((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
         self.labels_image0_cu = cu_array.GPUArray((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.labels_image1_cu = cu_array.GPUArray((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.labels_image2_cu = cu_array.GPUArray((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.labels_image_composite_cu = cu_array.GPUArray((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
+
+        self.depth_image_rgba_gpu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
+        self.depth_image_rgba_gpu_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
         self.labels_image_rgba_cpu = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
         self.labels_image_rgba_cu = cu_array.to_gpu(self.labels_image_rgba_cpu)
@@ -200,13 +207,7 @@ class RunLiveMultiApp(AppBase):
         ], dtype=np.uint8)
         self.labels_colors_cu = cu_array.to_gpu(labels_colors)
 
-        self.labels_image_rgba_tex = glGenTextures(1)
-        glBindTexture(GL_TEXTURE_2D, self.labels_image_rgba_tex)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, self.DIM_X, self.DIM_Y, 0, GL_RGBA, GL_UNSIGNED_BYTE, None)
+        self.labels_image_rgba_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
         self.frame_num = 0
 
@@ -243,17 +244,17 @@ class RunLiveMultiApp(AppBase):
 
         # Convert images to numpy arrays
         depth_image = np.asanyarray(depth_frame.get_data())
-        self.depth_image_cu.set(depth_image)
+        self.depth_image_cu.cu().set(depth_image)
 
-        grid_dim = (1, (self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1)
         block_dim = (1,32,32)
+        grid_dim = make_grid((1, self.DIM_X, self.DIM_Y), block_dim)
 
         # convert depth image to points
         self.points_ops.deproject_points(
             np.array([1, self.DIM_X, self.DIM_Y, -1], dtype=np.int32),
             self.PP,
             np.float32(self.FOCAL),
-            self.depth_image_cu,
+            self.depth_image_cu.cu(),
             self.pts_cu.cu(),
             grid=grid_dim,
             block=block_dim)
@@ -267,8 +268,8 @@ class RunLiveMultiApp(AppBase):
                 self.calibrated_plane.make(self.pts_cu, (self.DIM_X, self.DIM_Y))
 
         # every point..
-        grid_dim2 = (((self.DIM_X * self.DIM_Y) // 1024) + 1, 1, 1)
         block_dim2 = (1024, 1, 1)
+        grid_dim2 = make_grid((self.DIM_X * self.DIM_Y, 1, 1), block_dim2)
 
         self.points_ops.transform_points(
             np.int32(self.DIM_X * self.DIM_Y),
@@ -287,18 +288,29 @@ class RunLiveMultiApp(AppBase):
         self.points_ops.setup_depth_image_for_forest(
             np.int32(self.DIM_X * self.DIM_Y),
             self.pts_cu.cu(),
-            self.depth_image_cu,
+            self.depth_image_cu.cu(),
             grid=grid_dim2,
             block=block_dim2)
+
+        self.points_ops.make_depth_rgba(
+            np.int32(self.DIM_X),
+            np.int32(self.DIM_Y),
+            np.uint16(2000),
+            np.uint16(6000),
+            self.depth_image_cu.cu(),
+            self.depth_image_rgba_gpu.cu(),
+            grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
+            block=(32, 32, 1))
+        self.depth_image_rgba_gpu_tex.copy_from_gpu_buffer(self.depth_image_rgba_gpu)
 
         self.labels_image0_cu.fill(MAX_UINT16)
         self.labels_image1_cu.fill(MAX_UINT16)
         self.labels_image2_cu.fill(MAX_UINT16)
         self.labels_image_composite_cu.fill(MAX_UINT16)
 
-        self.decision_tree_evaluator.get_labels_forest(self.m0, self.depth_image_cu, self.labels_image0_cu)
-        self.decision_tree_evaluator.get_labels_forest(self.m1, self.depth_image_cu, self.labels_image1_cu)
-        self.decision_tree_evaluator.get_labels_forest(self.m2, self.depth_image_cu, self.labels_image2_cu)
+        self.decision_tree_evaluator.get_labels_forest(self.m0, self.depth_image_cu.cu(), self.labels_image0_cu)
+        self.decision_tree_evaluator.get_labels_forest(self.m1, self.depth_image_cu.cu(), self.labels_image1_cu)
+        self.decision_tree_evaluator.get_labels_forest(self.m2, self.depth_image_cu.cu(), self.labels_image2_cu)
 
         self.mean_shift.make_composite_labels_image(
             self.labels_images_ptrs_cu,
@@ -337,9 +349,7 @@ class RunLiveMultiApp(AppBase):
                     self.labels_image_rgba_cpu[my-1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
                     self.labels_image_rgba_cpu[my, mx+1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
                     self.labels_image_rgba_cpu[my, mx-1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-
-        glBindTexture(GL_TEXTURE_2D, self.labels_image_rgba_tex)
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, self.DIM_X, self.DIM_Y, GL_RGBA, GL_UNSIGNED_BYTE, self.labels_image_rgba_cpu)
+        self.labels_image_rgba_tex.set(self.labels_image_rgba_cpu)
 
         pts_cpu = self.pts_cu.cu().get()
 
@@ -409,8 +419,9 @@ class RunLiveMultiApp(AppBase):
                 cursor_pos[1] + graph_dim_y,
                 thresh_color)
 
+        imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X / 2, self.DIM_Y / 2)
 
-        imgui.image(self.labels_image_rgba_tex, self.DIM_X * 1.5, self.DIM_Y * 1.5)
+        imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 1.5, self.DIM_Y * 1.5)
 
         self.frame_num += 1
 
