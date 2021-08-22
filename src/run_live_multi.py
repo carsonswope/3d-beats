@@ -101,6 +101,11 @@ class RunLiveMultiApp(AppBase):
         self.depth_image_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.depth_image_cu_2 = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
+        self.depth_mm3_dims = (self.DIM_Y // (1<<3), self.DIM_X // (1<<3))
+        self.depth_image_cu_mm3 = GpuBuffer(self.depth_mm3_dims, dtype=np.uint16)
+        self.depth_image_cu_mm3_rbga = GpuBuffer(self.depth_mm3_dims + (4,), dtype=np.uint8)
+        self.depth_image_cu_mm3_rbga_tex = GpuTexture((self.depth_mm3_dims[1], self.depth_mm3_dims[0]), (GL_RGBA, GL_UNSIGNED_BYTE))
+
         self.labels_image0_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.labels_image1_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.labels_image2_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
@@ -295,12 +300,32 @@ class RunLiveMultiApp(AppBase):
             grid=grid_dim2,
             block=block_dim2)
 
-        self.depth_image_cu_2.cu().set(self.depth_image_cu.cu())
-        self.points_ops.gaussian_depth_filter(
-            self.depth_image_cu_2,
-            self.depth_image_cu,
-            sigma=self.gauss_sigma,
-            k_size=25)
+        if self.gauss_sigma > 0.1:
+            self.depth_image_cu_2.cu().set(self.depth_image_cu.cu())
+            self.points_ops.gaussian_depth_filter(
+                self.depth_image_cu_2,
+                self.depth_image_cu,
+                sigma=self.gauss_sigma,
+                k_size=11)
+        
+        self.points_ops.shrink_image(
+            np.array((self.DIM_X, self.DIM_Y), dtype=np.int32),
+            np.int32(3),
+            self.depth_image_cu.cu(),
+            self.depth_image_cu_mm3.cu(),
+            grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
+            block=(32, 32, 1))
+        
+        self.points_ops.make_depth_rgba(
+            np.array([self.depth_mm3_dims[1], self.depth_mm3_dims[0]], dtype=np.int32),
+            np.uint16(2000),
+            np.uint16(6000),
+            self.depth_image_cu_mm3.cu(),
+            self.depth_image_cu_mm3_rbga.cu(),
+            grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
+            block=(32, 32, 1))
+
+        self.depth_image_cu_mm3_rbga_tex.copy_from_gpu_buffer(self.depth_image_cu_mm3_rbga)
 
         self.points_ops.convert_0s_to_maxuint(
             np.int32(self.DIM_X * self.DIM_Y),
@@ -435,8 +460,9 @@ class RunLiveMultiApp(AppBase):
                 cursor_pos[1] + graph_dim_y,
                 thresh_color)
 
-        _, self.gauss_sigma = imgui.slider_float('depth sgma', self.gauss_sigma, 0.1, 10.)
+        _, self.gauss_sigma = imgui.slider_float('depth sgma', self.gauss_sigma, 0., 10.)
 
+        imgui.image(self.depth_image_cu_mm3_rbga_tex.gl(), self.DIM_X / 8., self.DIM_Y / 8.)
         imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X, self.DIM_Y)
 
         imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 1.5, self.DIM_Y * 1.5)

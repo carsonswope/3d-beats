@@ -371,3 +371,38 @@ void gaussian_depth_filter(
     d_out.set({y, x}, v);
 
 }}
+
+extern "C" {__global__
+void shrink_image(
+        int2 IMG_DIM_IN,
+        int mipmap_level, // 1, 2, 3, 4
+        uint16* _d_in,
+        uint16* _d_out) {
+
+    const int f = 1 << mipmap_level; // reduction factor
+    const int2 IMG_DIM_OUT = {
+        IMG_DIM_IN.x / f,
+        IMG_DIM_IN.y / f,
+    };
+
+    const int x_out = (blockIdx.x * blockDim.x) + threadIdx.x;
+    const int y_out = (blockIdx.y * blockDim.y) + threadIdx.y;
+    if (x_out >= IMG_DIM_OUT.x || y_out >= IMG_DIM_OUT.y) return;
+
+    auto d_in = Array2d<uint16>(_d_in, {IMG_DIM_IN.y, IMG_DIM_IN.x});
+    auto d_out = Array2d<uint16>(_d_out, {IMG_DIM_OUT.y, IMG_DIM_OUT.x});
+
+    const int x_in = x_out * f;
+    const int y_in = y_out * f;
+
+    if (x_in >= IMG_DIM_IN.x || y_in >= IMG_DIM_IN.y) {
+        d_out.set({y_out, x_out}, 0);
+    } else {
+        d_out.set({y_out, x_out}, d_in.get({y_in, x_in}));
+    }
+
+
+
+
+    
+}}

@@ -25,6 +25,8 @@ class PointsOps():
         self.split_pixels_by_nearest_color = cu_mod.get_function('split_pixels_by_nearest_color')
         self.make_rgba_from_labels = cu_mod.get_function('make_rgba_from_labels')
 
+        self.shrink_image = cu_mod.get_function('shrink_image')
+
         self.MAX_FILTER_SIZE = 41
         self._gaussian_filter = GpuBuffer((self.MAX_FILTER_SIZE*self.MAX_FILTER_SIZE,), dtype=np.float32)
         self._cached_filter_params = None
