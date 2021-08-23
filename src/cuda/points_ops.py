@@ -85,3 +85,52 @@ class PointsOps():
             grid=g,
             block=b)
     
+
+    def get_pixel_groups_cpu(self, depth_image: np.array, pct_thresh=0.05):
+
+        dim_y, dim_x = depth_image.shape
+
+        # 0: not seen
+        # 1: seen
+        seen = np.zeros(depth_image.shape, dtype=np.uint8)
+        seen[depth_image == 0] = 1
+
+        d_not0 = np.where(depth_image > 0)
+
+        left_group = None
+        right_group = None
+
+        dirs = [(-1,0),(1,0),(0,-1),(0,1)]
+
+        for y,x in zip(d_not0[0], d_not0[1]):
+
+            if seen[y,x]:
+                continue
+            elif depth_image[y,x] == 0:
+                seen[y,x] = 1
+            else: # not seen
+                # new group!
+                seen[y,x] = 1
+                to_visit = [(y,x)]
+                g = []
+                while len(to_visit):
+                    c = to_visit.pop()
+                    g.append(c)
+                    for d in dirs:
+                        new_c = (c[0] + d[0], c[1] + d[1])
+                        if new_c[0] >= 0 and new_c[1] >= 0 and new_c[0] < dim_y and new_c[1] < dim_x and not seen[new_c[0], new_c[1]]:
+                            seen[new_c[0], new_c[1]] = 1
+                            if depth_image[new_c[0], new_c[1]]:
+                                to_visit.append(new_c)
+
+                if len(g) / (dim_y * dim_x) > pct_thresh:
+
+                    center_y, center_x = np.sum(np.array(g), axis=0) / len(g)
+                    if center_x < (dim_x/2):
+                        if left_group is None or len(g) > len(left_group):
+                            left_group = g
+                    else:
+                        if right_group is None or len(g) > len(right_group):
+                            right_group = g
+
+        return (left_group, right_group)

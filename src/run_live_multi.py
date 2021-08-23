@@ -101,8 +101,10 @@ class RunLiveMultiApp(AppBase):
         self.depth_image_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.depth_image_cu_2 = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
-        self.depth_mm3_dims = (self.DIM_Y // (1<<3), self.DIM_X // (1<<3))
+        self.depth_mm_level = 3
+        self.depth_mm3_dims = (self.DIM_Y // (1<<self.depth_mm_level), self.DIM_X // (1<<self.depth_mm_level))
         self.depth_image_cu_mm3 = GpuBuffer(self.depth_mm3_dims, dtype=np.uint16)
+        self.depth_image_cu_mm3_groups = GpuBuffer(self.depth_mm3_dims, dtype=np.uint16)
         self.depth_image_cu_mm3_rbga = GpuBuffer(self.depth_mm3_dims + (4,), dtype=np.uint8)
         self.depth_image_cu_mm3_rbga_tex = GpuTexture((self.depth_mm3_dims[1], self.depth_mm3_dims[0]), (GL_RGBA, GL_UNSIGNED_BYTE))
 
@@ -179,10 +181,10 @@ class RunLiveMultiApp(AppBase):
 
         self.fingertip_idxes = [5, 8, 11, 14]
         self.fingertip_thresholds = {
-            5: 140.,
-            8: 140.,
-            11: 140.,
-            14: 120.,
+            5: 150.,
+            8: 150.,
+            11: 150.,
+            14: 130.,
         }
         self.fingertip_notes = {
             5: 36,
@@ -191,7 +193,7 @@ class RunLiveMultiApp(AppBase):
             14: 39,
         }
         self.fingertip_states = {i:False for i in self.fingertip_idxes} # start off..
-        self.FINGERTIP_UP_THRESHOLD = 20.
+
         self.MAX_FINGERTIP_POSITIONS = 50
         self.fingertip_positions = {i:[] for i in self.fingertip_idxes}
 
@@ -308,19 +310,36 @@ class RunLiveMultiApp(AppBase):
                 sigma=self.gauss_sigma,
                 k_size=11)
         
+        # make smaller depth image. faster to copy and process cpu-side
         self.points_ops.shrink_image(
             np.array((self.DIM_X, self.DIM_Y), dtype=np.int32),
-            np.int32(3),
+            np.int32(self.depth_mm_level),
             self.depth_image_cu.cu(),
             self.depth_image_cu_mm3.cu(),
             grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
             block=(32, 32, 1))
+
+        left_group, right_group = self.points_ops.get_pixel_groups_cpu(self.depth_image_cu_mm3.cu().get())
+
+        pixel_groups_img = np.zeros(self.depth_image_cu_mm3.shape, dtype=np.uint16)
+
+        if left_group is not None:
+            for py, px in left_group:
+                pixel_groups_img[py, px] = 2
+        if right_group is not None:
+            for py, px in right_group:
+                pixel_groups_img[py, px] = 3
+
+        self.depth_image_cu_mm3_groups.cu().set(pixel_groups_img)
+        
+
+
         
         self.points_ops.make_depth_rgba(
             np.array([self.depth_mm3_dims[1], self.depth_mm3_dims[0]], dtype=np.int32),
-            np.uint16(2000),
-            np.uint16(6000),
-            self.depth_image_cu_mm3.cu(),
+            np.uint16(1),
+            np.uint16(4),
+            self.depth_image_cu_mm3_groups.cu(),
             self.depth_image_cu_mm3_rbga.cu(),
             grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
             block=(32, 32, 1))
@@ -462,7 +481,7 @@ class RunLiveMultiApp(AppBase):
 
         _, self.gauss_sigma = imgui.slider_float('depth sgma', self.gauss_sigma, 0., 10.)
 
-        imgui.image(self.depth_image_cu_mm3_rbga_tex.gl(), self.DIM_X / 8., self.DIM_Y / 8.)
+        imgui.image(self.depth_image_cu_mm3_rbga_tex.gl(), self.DIM_X / 2., self.DIM_Y / 2.)
         imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X, self.DIM_Y)
 
         imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 1.5, self.DIM_Y * 1.5)
