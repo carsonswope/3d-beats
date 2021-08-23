@@ -57,6 +57,9 @@ class AppBase():
 
         glfw.swap_buffers(self.window)
 
+        self.ms_per_frame_log_max = 100
+        self.ms_per_frame_log = [0]
+
     # def key_event(self, key, action, modifiers):
     #     self.imgui.key_event(key, action, modifiers)
         
@@ -80,12 +83,13 @@ class AppBase():
         start_time = time.perf_counter()
 
         while not glfw.window_should_close(self.window):
+            t = time.perf_counter() - start_time
+
             glfw.poll_events()
 
             glClearColor(0, 0, 0, 1)
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
-            t = time.perf_counter() - start_time
             imgui.new_frame()
 
             self.tick(t)
@@ -99,6 +103,13 @@ class AppBase():
             imgui.end_frame()
 
             glfw.swap_buffers(self.window)
+
+            t_end = time.perf_counter() - start_time
+            t_frame = t_end - t
+
+            self.ms_per_frame_log.append(t_frame * 1000) # s -> ms
+            while len(self.ms_per_frame_log) > self.ms_per_frame_log_max:
+                self.ms_per_frame_log.pop(0)
 
         pycuda.autoinit.context.pop()
 

@@ -277,6 +277,8 @@ class RunLiveMultiApp(AppBase):
 
         self.gauss_sigma = 2.5
 
+        # self.last_t = 
+
     def run_per_hand_pipeline(self, g_id, flip_x):
 
         # self.depth_image_cu_2.set(self.depth_image_cu)
@@ -575,6 +577,18 @@ class RunLiveMultiApp(AppBase):
         imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X, self.DIM_Y)
 
         imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 1.5, self.DIM_Y * 1.5)
+
+        imgui.plot_lines('ms per frame',
+            np.array(self.ms_per_frame_log, dtype=np.float32),
+            scale_max=100.,
+            scale_min=0.,
+            graph_size=(300,200))
+        
+        imgui.plot_lines('FPS',
+            1000. / np.array(self.ms_per_frame_log, dtype=np.float32),
+            scale_max=100.,
+            scale_min=0.,
+            graph_size=(300,200))
 
         self.frame_num += 1
 
