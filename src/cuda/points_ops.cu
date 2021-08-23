@@ -461,4 +461,22 @@ void stencil_depth_image_by_group(
     d_out.set({y, x}, d_in.get({y, x}));
 
 }}
+
+
+extern "C" {__global__
+void flip_x(
+        int2 IMG_DIM,
+        uint16* _in,
+        uint16* _out) {
+
+    const int in_x = (blockIdx.x * blockDim.x) + threadIdx.x;
+    const int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+    if (in_x >= IMG_DIM.x || y >= IMG_DIM.y) return;
+
+    auto in = Array2d<uint16>(_in, {IMG_DIM.y, IMG_DIM.x});
+    auto out = Array2d<uint16>(_out, {IMG_DIM.y, IMG_DIM.x});
+
+    const int out_x = IMG_DIM.x - (in_x + 1);
+    out.set({y, out_x}, in.get({y, in_x}));
+}}
     

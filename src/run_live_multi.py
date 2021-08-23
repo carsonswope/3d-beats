@@ -71,15 +71,13 @@ class FingertipState:
 
 
 class HandState:
-    def __init__(self, on_fn, off_fn, num_positions = 50):
-        midi_notes = [36, 37, 38, 39]
-        d = [150., 150., 150., 135.]
+    def __init__(self, defaults, on_fn, off_fn, num_positions = 50):
         self.fingertips = [FingertipState(
-            lambda n, v: on_fn(n, v),
-            lambda n: off_fn(n),
+            on_fn,
+            off_fn,
             num_positions,
             z_thresh,
-            midi_note) for midi_note, z_thresh in zip(midi_notes, d)]
+            midi_note) for z_thresh, midi_note in defaults]
 
 
 class RunLiveMultiApp(AppBase):
@@ -100,9 +98,6 @@ class RunLiveMultiApp(AppBase):
         self.midi_out = rtmidi.MidiOut()
         # available_ports = self.midi_out.get_ports()
         self.midi_out.open_port(1) # loopbe port..
-
-        # self.note_on = lambda n,v: [0x90, n, v]
-        # self.note_off = lambda n: [0x80, n, 0]
 
         RS_BAG = args.rs_bag
 
@@ -172,6 +167,7 @@ class RunLiveMultiApp(AppBase):
         self.labels_image1_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.labels_image2_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.labels_image_composite_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
+        self.labels_image_composite_cu_2 = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
         self.depth_image_rgba_gpu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
         self.depth_image_rgba_gpu_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
@@ -241,29 +237,21 @@ class RunLiveMultiApp(AppBase):
 
         self.fingertip_idxes = [5, 8, 11, 14]
 
+        on_fn = lambda n,v: self.midi_out.send_message([0x90, n, v])
+        off_fn = lambda n: self.midi_out.send_message([0x80, n, 0])
+
         # fingers: 0 = index, 1 = middle, 2 = ring, 3 = pinky
-        self.hand_state = HandState(
-            # on fn
-            lambda n, v: self.midi_out.send_message([0x90, n, v]),
-            # off fn
-            lambda n: self.midi_out.send_message([0x80, n, 0]))
-
-        # self.fingertip_thresholds = {
-        #     5: 150.,
-        #     8: 150.,
-        #     11: 150.,
-        #     14: 130.,
-        # }
-        # self.fingertip_notes = {
-        #     5: 36,
-        #     8: 37,
-        #     11: 38,
-        #     14: 39,
-        # }
-        # self.fingertip_states = {i:False for i in self.fingertip_idxes} # start off..
-
-        # self.MAX_FINGERTIP_POSITIONS = 50
-        # self.fingertip_positions = {i:[] for i in self.fingertip_idxes}
+        self.hand_states = [
+            HandState(
+                # defaults! (z_thresh, midi_note)
+                [(150., 36), (150., 37), (150., 38), (150., 39)],
+                on_fn,
+                off_fn),
+            HandState(
+                # defaults! (z_thresh, midi_note)
+                [(150., 40), (150., 41), (150., 42), (150., 43)],
+                on_fn,
+                off_fn)]
 
         labels_colors = np.array([
             # arm
@@ -291,6 +279,9 @@ class RunLiveMultiApp(AppBase):
 
     def run_per_hand_pipeline(self, g_id, flip_x):
 
+        # self.depth_image_cu_2.set(self.depth_image_cu)
+        self.depth_image_group_cu.cu().fill(0)
+
         self.points_ops.stencil_depth_image_by_group(
             np.array([self.DIM_X, self.DIM_Y], dtype=np.int32),
             np.int32(self.depth_mm_level),
@@ -301,12 +292,19 @@ class RunLiveMultiApp(AppBase):
             grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
             block=(32, 32, 1))
 
-
-        self.depth_image_cu.cu().set(self.depth_image_group_cu.cu())
+        if flip_x:
+            self.points_ops.flip_x(
+                np.array([self.DIM_X, self.DIM_Y], dtype=np.int32),
+                self.depth_image_group_cu.cu(),
+                self.depth_image_cu_2.cu(),
+                grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
+                block=(32, 32, 1))
+        else:
+            self.depth_image_cu_2.cu().set(self.depth_image_group_cu.cu())
 
         self.points_ops.convert_0s_to_maxuint(
             np.int32(self.DIM_X * self.DIM_Y),
-            self.depth_image_cu.cu(),
+            self.depth_image_cu_2.cu(),
             grid=make_grid((self.DIM_X * self.DIM_Y, 1, 1), (1024, 1, 1)),
             block=(1024, 1, 1))
 
@@ -314,7 +312,7 @@ class RunLiveMultiApp(AppBase):
             np.array((self.DIM_X, self.DIM_Y), dtype=np.int32),
             np.uint16(2000),
             np.uint16(6000),
-            self.depth_image_cu.cu(),
+            self.depth_image_cu_2.cu(),
             self.depth_image_rgba_gpu.cu(),
             grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
             block=(32, 32, 1))
@@ -325,7 +323,7 @@ class RunLiveMultiApp(AppBase):
         self.labels_image2_cu.cu().fill(MAX_UINT16)
         self.labels_image_composite_cu.cu().fill(MAX_UINT16)
 
-        depth_image_cu_reshaped = self.depth_image_cu.cu().reshape((1, self.DIM_Y, self.DIM_X))
+        depth_image_cu_reshaped = self.depth_image_cu_2.cu().reshape((1, self.DIM_Y, self.DIM_X))
         self.decision_tree_evaluator.get_labels_forest(self.m0, depth_image_cu_reshaped, self.labels_image0_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
         self.decision_tree_evaluator.get_labels_forest(self.m1, depth_image_cu_reshaped, self.labels_image1_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
         self.decision_tree_evaluator.get_labels_forest(self.m2, depth_image_cu_reshaped, self.labels_image2_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
@@ -336,6 +334,15 @@ class RunLiveMultiApp(AppBase):
             self.DIM_Y,
             self.labels_conditions_cu,
             self.labels_image_composite_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
+
+        if flip_x:
+            self.labels_image_composite_cu_2.cu().set(self.labels_image_composite_cu.cu())
+            self.points_ops.flip_x(
+                np.array([self.DIM_X, self.DIM_Y], dtype=np.int32),
+                self.labels_image_composite_cu_2.cu(),
+                self.labels_image_composite_cu.cu(),
+                grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
+                block=(32, 32, 1))
         
         label_means = self.mean_shift.run(
             6,
@@ -370,15 +377,22 @@ class RunLiveMultiApp(AppBase):
 
         pts_cpu = self.pts_cu.cu().get()
 
+        if flip_x:
+            # left hand
+            hand_state = self.hand_states[1]
+        else:
+            # right hand
+            hand_state = self.hand_states[0]
+
         for i, f_idx in zip(range(len(self.fingertip_idxes)), self.fingertip_idxes):
 
             px, py = label_means[f_idx-1].astype(np.int)
             if px < 0 or py < 0 or px >= self.DIM_X or py >= self.DIM_Y:
-                self.hand_state.fingertips[i].reset_positions()
+                hand_state.fingertips[i].reset_positions()
             else:
                 d = pts_cpu[py, px]
                 d_z = -d[2]
-                self.hand_state.fingertips[i].next_z_pos(d_z)
+                hand_state.fingertips[i].next_z_pos(d_z)
 
     def splash(self):
         imgui.text('loading...')
@@ -500,12 +514,11 @@ class RunLiveMultiApp(AppBase):
 
         self.depth_image_cu_mm3_rbga_tex.copy_from_gpu_buffer(self.depth_image_cu_mm3_rbga)
 
-        self.depth_image_group_cu.cu().fill(0)
-
         # generate RGB image for debugging!
         self.labels_image_rgba_cu.fill(np.uint8(0))
 
         self.run_per_hand_pipeline(1, False)
+        self.run_per_hand_pipeline(2, True)
 
         imgui.text('running!')
 
@@ -522,12 +535,14 @@ class RunLiveMultiApp(AppBase):
         graph_dim_y = 150.
         graph_scale_z = 500.
 
+        hand_state = self.hand_states[0]
+
         for i in range(len(self.fingertip_idxes)):
 
             imgui.set_cursor_pos((c_x + ((graph_dim_x + graph_pad_x) * i), c_y))
 
-            if len(self.hand_state.fingertips[i].positions) > 0:
-                a = np.array(self.hand_state.fingertips[i].positions, dtype=np.float32)
+            if len(hand_state.fingertips[i].positions) > 0:
+                a = np.array(hand_state.fingertips[i].positions, dtype=np.float32)
             else:
                 a = np.array([0], dtype=np.float32)
 
@@ -540,9 +555,9 @@ class RunLiveMultiApp(AppBase):
                 scale_min=0.,
                 graph_size=(graph_dim_x, graph_dim_y))
 
-            f_threshold = self.hand_state.fingertips[i].z_thresh
+            f_threshold = hand_state.fingertips[i].z_thresh
 
-            if self.hand_state.fingertips[i].note_on:
+            if hand_state.fingertips[i].note_on:
                 thresh_color = imgui.get_color_u32_rgba(0.3,1,0.8,0.30)
             else:
                 thresh_color = imgui.get_color_u32_rgba(0.3,1,0.8,0.05)

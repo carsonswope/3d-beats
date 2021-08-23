@@ -29,6 +29,7 @@ class PointsOps():
 
         self.shrink_image = cu_mod.get_function('shrink_image')
         self.grow_groups = cu_mod.get_function('grow_groups')
+        self.flip_x = cu_mod.get_function('flip_x')
 
         self.MAX_FILTER_SIZE = 41
         self._gaussian_filter = GpuBuffer((self.MAX_FILTER_SIZE*self.MAX_FILTER_SIZE,), dtype=np.float32)
