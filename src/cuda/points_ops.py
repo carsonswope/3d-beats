@@ -25,7 +25,10 @@ class PointsOps():
         self.split_pixels_by_nearest_color = cu_mod.get_function('split_pixels_by_nearest_color')
         self.make_rgba_from_labels = cu_mod.get_function('make_rgba_from_labels')
 
+        self.stencil_depth_image_by_group = cu_mod.get_function('stencil_depth_image_by_group')
+
         self.shrink_image = cu_mod.get_function('shrink_image')
+        self.grow_groups = cu_mod.get_function('grow_groups')
 
         self.MAX_FILTER_SIZE = 41
         self._gaussian_filter = GpuBuffer((self.MAX_FILTER_SIZE*self.MAX_FILTER_SIZE,), dtype=np.float32)
@@ -97,8 +100,8 @@ class PointsOps():
 
         d_not0 = np.where(depth_image > 0)
 
-        left_group = None
         right_group = None
+        left_group = None
 
         dirs = [(-1,0),(1,0),(0,-1),(0,1)]
 
@@ -127,10 +130,10 @@ class PointsOps():
 
                     center_y, center_x = np.sum(np.array(g), axis=0) / len(g)
                     if center_x < (dim_x/2):
-                        if left_group is None or len(g) > len(left_group):
-                            left_group = g
-                    else:
                         if right_group is None or len(g) > len(right_group):
                             right_group = g
+                    else:
+                        if left_group is None or len(g) > len(left_group):
+                            left_group = g
 
-        return (left_group, right_group)
+        return (right_group, left_group)

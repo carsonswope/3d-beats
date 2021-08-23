@@ -306,7 +306,7 @@ void make_depth_rgba(
         new_color[0] = 157;
         new_color[1] = 195;
         new_color[2] = 152; 
-    } else if (d <= d_min || d >= d_max) {
+    } else if (d < d_min || d > d_max) {
         new_color[0] = 157;
         new_color[1] = 152;
         new_color[2] = 195;
@@ -400,9 +400,65 @@ void shrink_image(
     } else {
         d_out.set({y_out, x_out}, d_in.get({y_in, x_in}));
     }
-
-
-
-
-    
 }}
+
+
+extern "C" {__global__
+void grow_groups(
+        int2 IMG_DIM,
+        uint16* _g_in,
+        uint16* _g_out) {
+
+    const int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+    const int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+    if (x >= IMG_DIM.x || y >= IMG_DIM.y) return;
+
+    const int2 DIRS[4] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+
+    auto g_in = Array2d<uint16>(_g_in, {IMG_DIM.y, IMG_DIM.x});
+    auto g_out = Array2d<uint16>(_g_out, {IMG_DIM.y, IMG_DIM.x});
+
+    const auto g = g_in.get({y, x});
+    if (g != 0) {
+        g_out.set({y, x}, g);
+        return;
+    };
+
+    for (int i = 0; i < 4; i++) {
+        const auto dir = DIRS[i];
+        const auto _g = g_in.get({y + dir.y, x + dir.x});
+        if (_g != 0) {
+            g_out.set({y, x}, _g);
+            return;
+        }
+    }
+}}
+
+
+extern "C" {__global__
+void stencil_depth_image_by_group(
+        int2 IMG_DIM,
+        int mipmap_level,
+        int group,
+        uint16* _g_in,
+        uint16* _d_in,
+        uint16* _d_out) {
+
+    const int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+    const int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+    if (x >= IMG_DIM.x || y >= IMG_DIM.y) return;
+
+    const int f = 1 << mipmap_level; // reduction factor
+
+    auto g_in = Array2d<uint16>(_g_in, {IMG_DIM.y / f, IMG_DIM.x / f});
+    auto d_in = Array2d<uint16>(_d_in, {IMG_DIM.y, IMG_DIM.x});
+    auto d_out = Array2d<uint16>(_d_out, {IMG_DIM.y, IMG_DIM.x});
+
+    const auto g = g_in.get({y / f, x / f});
+
+    if (g != group) return;
+
+    d_out.set({y, x}, d_in.get({y, x}));
+
+}}
+    

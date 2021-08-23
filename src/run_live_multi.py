@@ -100,11 +100,13 @@ class RunLiveMultiApp(AppBase):
         self.pts_cu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.float32)
         self.depth_image_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.depth_image_cu_2 = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
+        self.depth_image_group_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
         self.depth_mm_level = 3
         self.depth_mm3_dims = (self.DIM_Y // (1<<self.depth_mm_level), self.DIM_X // (1<<self.depth_mm_level))
         self.depth_image_cu_mm3 = GpuBuffer(self.depth_mm3_dims, dtype=np.uint16)
         self.depth_image_cu_mm3_groups = GpuBuffer(self.depth_mm3_dims, dtype=np.uint16)
+        self.depth_image_cu_mm3_groups_2 = GpuBuffer(self.depth_mm3_dims, dtype=np.uint16)
         self.depth_image_cu_mm3_rbga = GpuBuffer(self.depth_mm3_dims + (4,), dtype=np.uint8)
         self.depth_image_cu_mm3_rbga_tex = GpuTexture((self.depth_mm3_dims[1], self.depth_mm3_dims[0]), (GL_RGBA, GL_UNSIGNED_BYTE))
 
@@ -319,32 +321,54 @@ class RunLiveMultiApp(AppBase):
             grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
             block=(32, 32, 1))
 
-        left_group, right_group = self.points_ops.get_pixel_groups_cpu(self.depth_image_cu_mm3.cu().get())
+        right_group, left_group = self.points_ops.get_pixel_groups_cpu(self.depth_image_cu_mm3.cu().get())
 
         pixel_groups_img = np.zeros(self.depth_image_cu_mm3.shape, dtype=np.uint16)
+
+        if right_group is not None:
+            for py, px in right_group:
+                pixel_groups_img[py, px] = 1
 
         if left_group is not None:
             for py, px in left_group:
                 pixel_groups_img[py, px] = 2
-        if right_group is not None:
-            for py, px in right_group:
-                pixel_groups_img[py, px] = 3
 
+        # self.depth_image_cu_mm3_groups.cu().set(pixel_groups_img)
+        self.depth_image_cu_mm3_groups_2.cu().set(pixel_groups_img)
         self.depth_image_cu_mm3_groups.cu().set(pixel_groups_img)
-        
 
-
+        self.points_ops.grow_groups(
+            np.array([self.depth_mm3_dims[1], self.depth_mm3_dims[0]], dtype=np.int32),
+            self.depth_image_cu_mm3_groups_2.cu(),
+            self.depth_image_cu_mm3_groups.cu(),
+            grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
+            block=(32, 32, 1))
         
         self.points_ops.make_depth_rgba(
             np.array([self.depth_mm3_dims[1], self.depth_mm3_dims[0]], dtype=np.int32),
-            np.uint16(1),
-            np.uint16(4),
+            np.uint16(0),
+            np.uint16(2),
             self.depth_image_cu_mm3_groups.cu(),
             self.depth_image_cu_mm3_rbga.cu(),
             grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
             block=(32, 32, 1))
 
         self.depth_image_cu_mm3_rbga_tex.copy_from_gpu_buffer(self.depth_image_cu_mm3_rbga)
+
+        self.depth_image_group_cu.cu().fill(0)
+
+
+        self.points_ops.stencil_depth_image_by_group(
+            np.array([self.DIM_X, self.DIM_Y], dtype=np.int32),
+            np.int32(self.depth_mm_level),
+            np.int32(1),
+            self.depth_image_cu_mm3_groups.cu(),
+            self.depth_image_cu.cu(),
+            self.depth_image_group_cu.cu(),
+            grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
+            block=(32, 32, 1))
+        
+        self.depth_image_cu.cu().set(self.depth_image_group_cu.cu())
 
         self.points_ops.convert_0s_to_maxuint(
             np.int32(self.DIM_X * self.DIM_Y),
