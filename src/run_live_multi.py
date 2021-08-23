@@ -24,6 +24,64 @@ import rtmidi
 from engine.window import AppBase
 from engine.buffer import GpuBuffer
 
+
+# note_on = lambda n,v: [0x90, n, v]
+# note_off = lambda n: [0x80, n, 0]
+
+
+class FingertipState:
+    def __init__(self, on_fn, off_fn, num_positions = 50, z_thresh = 150, midi_note = 36):
+        self.positions = []
+        self.num_positions = num_positions
+
+        self.on_fn = on_fn
+        self.off_fn = off_fn
+
+        self.z_thresh = z_thresh
+        self.midi_note = midi_note
+        self.note_on = False
+    
+    def reset_positions(self):
+        # turn off note if on
+        self.positions.clear()
+        self.set_midi_state(False)
+        pass
+
+    def next_z_pos(self, z_pos):
+
+        self.positions.append(z_pos)
+        while len(self.positions) > self.num_positions:
+            self.positions.pop(0)
+            
+        if len(self.positions) > 10: # arbitrary..
+            last_pos = self.positions[-1]
+            if last_pos < self.z_thresh:
+                self.set_midi_state(True)
+            else:
+                self.set_midi_state(False)
+
+    def set_midi_state(self, s):
+        if s and not self.note_on:
+            self.note_on = True
+            self.on_fn(self.midi_note, 127) # todo: velocity!
+
+        elif not s and self.note_on:
+            self.note_on = False
+            self.off_fn(self.midi_note)
+
+
+class HandState:
+    def __init__(self, on_fn, off_fn, num_positions = 50):
+        midi_notes = [36, 37, 38, 39]
+        d = [150., 150., 150., 135.]
+        self.fingertips = [FingertipState(
+            lambda n, v: on_fn(n, v),
+            lambda n: off_fn(n),
+            num_positions,
+            z_thresh,
+            midi_note) for midi_note, z_thresh in zip(midi_notes, d)]
+
+
 class RunLiveMultiApp(AppBase):
     def __init__(self):
         super().__init__(title="Test-icles", width=1920, height=1500)
@@ -43,8 +101,8 @@ class RunLiveMultiApp(AppBase):
         # available_ports = self.midi_out.get_ports()
         self.midi_out.open_port(1) # loopbe port..
 
-        self.note_on = lambda n,v: [0x90, n, v]
-        self.note_off = lambda n: [0x80, n, 0]
+        # self.note_on = lambda n,v: [0x90, n, v]
+        # self.note_off = lambda n: [0x80, n, 0]
 
         RS_BAG = args.rs_bag
 
@@ -92,8 +150,8 @@ class RunLiveMultiApp(AppBase):
         self.DIM_X = depth_intrin.width
         self.DIM_Y = depth_intrin.height
 
-        b = (1024, 1, 1)
-        g = make_grid((self.DIM_X * self.DIM_Y, 1, 1), b)
+        # b = (1024, 1, 1)
+        # g = make_grid((self.DIM_X * self.DIM_Y, 1, 1), b)
 
         self.FOCAL = depth_intrin.fx
         self.PP = np.array([depth_intrin.ppx, depth_intrin.ppy], dtype=np.float32)
@@ -182,22 +240,30 @@ class RunLiveMultiApp(AppBase):
         self.NUM_COMPOSITE_CLASSES = 15 # 1-15
 
         self.fingertip_idxes = [5, 8, 11, 14]
-        self.fingertip_thresholds = {
-            5: 150.,
-            8: 150.,
-            11: 150.,
-            14: 130.,
-        }
-        self.fingertip_notes = {
-            5: 36,
-            8: 37,
-            11: 38,
-            14: 39,
-        }
-        self.fingertip_states = {i:False for i in self.fingertip_idxes} # start off..
 
-        self.MAX_FINGERTIP_POSITIONS = 50
-        self.fingertip_positions = {i:[] for i in self.fingertip_idxes}
+        # fingers: 0 = index, 1 = middle, 2 = ring, 3 = pinky
+        self.hand_state = HandState(
+            # on fn
+            lambda n, v: self.midi_out.send_message([0x90, n, v]),
+            # off fn
+            lambda n: self.midi_out.send_message([0x80, n, 0]))
+
+        # self.fingertip_thresholds = {
+        #     5: 150.,
+        #     8: 150.,
+        #     11: 150.,
+        #     14: 130.,
+        # }
+        # self.fingertip_notes = {
+        #     5: 36,
+        #     8: 37,
+        #     11: 38,
+        #     14: 39,
+        # }
+        # self.fingertip_states = {i:False for i in self.fingertip_idxes} # start off..
+
+        # self.MAX_FINGERTIP_POSITIONS = 50
+        # self.fingertip_positions = {i:[] for i in self.fingertip_idxes}
 
         labels_colors = np.array([
             # arm
@@ -223,17 +289,96 @@ class RunLiveMultiApp(AppBase):
 
         self.gauss_sigma = 2.5
 
+    def run_per_hand_pipeline(self, g_id, flip_x):
 
-    def set_fingertip_state(self, f_idx, s):
-        note = self.fingertip_notes[f_idx]
-        if s and not self.fingertip_states[f_idx]:
-            self.fingertip_states[f_idx] = True
-            self.midi_out.send_message(self.note_on(note, 127))
+        self.points_ops.stencil_depth_image_by_group(
+            np.array([self.DIM_X, self.DIM_Y], dtype=np.int32),
+            np.int32(self.depth_mm_level),
+            np.int32(g_id),
+            self.depth_image_cu_mm3_groups.cu(),
+            self.depth_image_cu.cu(),
+            self.depth_image_group_cu.cu(),
+            grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
+            block=(32, 32, 1))
+
+
+        self.depth_image_cu.cu().set(self.depth_image_group_cu.cu())
+
+        self.points_ops.convert_0s_to_maxuint(
+            np.int32(self.DIM_X * self.DIM_Y),
+            self.depth_image_cu.cu(),
+            grid=make_grid((self.DIM_X * self.DIM_Y, 1, 1), (1024, 1, 1)),
+            block=(1024, 1, 1))
+
+        self.points_ops.make_depth_rgba(
+            np.array((self.DIM_X, self.DIM_Y), dtype=np.int32),
+            np.uint16(2000),
+            np.uint16(6000),
+            self.depth_image_cu.cu(),
+            self.depth_image_rgba_gpu.cu(),
+            grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
+            block=(32, 32, 1))
+        self.depth_image_rgba_gpu_tex.copy_from_gpu_buffer(self.depth_image_rgba_gpu)
+
+        self.labels_image0_cu.cu().fill(MAX_UINT16)
+        self.labels_image1_cu.cu().fill(MAX_UINT16)
+        self.labels_image2_cu.cu().fill(MAX_UINT16)
+        self.labels_image_composite_cu.cu().fill(MAX_UINT16)
+
+        depth_image_cu_reshaped = self.depth_image_cu.cu().reshape((1, self.DIM_Y, self.DIM_X))
+        self.decision_tree_evaluator.get_labels_forest(self.m0, depth_image_cu_reshaped, self.labels_image0_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
+        self.decision_tree_evaluator.get_labels_forest(self.m1, depth_image_cu_reshaped, self.labels_image1_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
+        self.decision_tree_evaluator.get_labels_forest(self.m2, depth_image_cu_reshaped, self.labels_image2_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
+
+        self.mean_shift.make_composite_labels_image(
+            self.labels_images_ptrs_cu,
+            self.DIM_X,
+            self.DIM_Y,
+            self.labels_conditions_cu,
+            self.labels_image_composite_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
         
-        elif not s and self.fingertip_states[f_idx]:
-            self.fingertip_states[f_idx] = False
-            self.midi_out.send_message(self.note_off(note))
+        label_means = self.mean_shift.run(
+            6,
+            self.labels_image_composite_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)),
+            self.NUM_COMPOSITE_CLASSES,
+            self.mean_shift_variances_cu)
 
+        self.points_ops.make_rgba_from_labels(
+            np.uint32(self.DIM_X),
+            np.uint32(self.DIM_Y),
+            np.uint32(self.NUM_COMPOSITE_CLASSES),
+            self.labels_image_composite_cu.cu(),
+            self.labels_colors_cu,
+            self.labels_image_rgba_cu,
+            grid = ((self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1, 1),
+            block = (32,32,1))
+
+        self.labels_image_rgba_cu.get(self.labels_image_rgba_cpu)
+
+        for m in label_means:
+            if not math.isnan(m[0]):
+                my = int(m[1])
+                mx = int(m[0])
+                if my > 0 and my < self.DIM_Y - 1 and mx > 0 and mx < self.DIM_X - 1:
+                    self.labels_image_rgba_cpu[my, mx, :] = np.array([255, 255, 255, 255], dtype=np.uint8)
+                    self.labels_image_rgba_cpu[my+1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                    self.labels_image_rgba_cpu[my-1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                    self.labels_image_rgba_cpu[my, mx+1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                    self.labels_image_rgba_cpu[my, mx-1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+
+        self.labels_image_rgba_tex.set(self.labels_image_rgba_cpu)
+
+        pts_cpu = self.pts_cu.cu().get()
+
+        for i, f_idx in zip(range(len(self.fingertip_idxes)), self.fingertip_idxes):
+
+            px, py = label_means[f_idx-1].astype(np.int)
+            if px < 0 or py < 0 or px >= self.DIM_X or py >= self.DIM_Y:
+                self.hand_state.fingertips[i].reset_positions()
+            else:
+                d = pts_cpu[py, px]
+                d_z = -d[2]
+                self.hand_state.fingertips[i].next_z_pos(d_z)
 
     def splash(self):
         imgui.text('loading...')
@@ -357,104 +502,10 @@ class RunLiveMultiApp(AppBase):
 
         self.depth_image_group_cu.cu().fill(0)
 
-
-        self.points_ops.stencil_depth_image_by_group(
-            np.array([self.DIM_X, self.DIM_Y], dtype=np.int32),
-            np.int32(self.depth_mm_level),
-            np.int32(1),
-            self.depth_image_cu_mm3_groups.cu(),
-            self.depth_image_cu.cu(),
-            self.depth_image_group_cu.cu(),
-            grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
-            block=(32, 32, 1))
-        
-        self.depth_image_cu.cu().set(self.depth_image_group_cu.cu())
-
-        self.points_ops.convert_0s_to_maxuint(
-            np.int32(self.DIM_X * self.DIM_Y),
-            self.depth_image_cu.cu(),
-            grid=grid_dim2,
-            block=block_dim2)
-
-        self.points_ops.make_depth_rgba(
-            np.array((self.DIM_X, self.DIM_Y), dtype=np.int32),
-            np.uint16(2000),
-            np.uint16(6000),
-            self.depth_image_cu.cu(),
-            self.depth_image_rgba_gpu.cu(),
-            grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
-            block=(32, 32, 1))
-        self.depth_image_rgba_gpu_tex.copy_from_gpu_buffer(self.depth_image_rgba_gpu)
-
-        self.labels_image0_cu.cu().fill(MAX_UINT16)
-        self.labels_image1_cu.cu().fill(MAX_UINT16)
-        self.labels_image2_cu.cu().fill(MAX_UINT16)
-        self.labels_image_composite_cu.cu().fill(MAX_UINT16)
-
-        depth_image_cu_reshaped = self.depth_image_cu.cu().reshape((1, self.DIM_Y, self.DIM_X))
-        self.decision_tree_evaluator.get_labels_forest(self.m0, depth_image_cu_reshaped, self.labels_image0_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
-        self.decision_tree_evaluator.get_labels_forest(self.m1, depth_image_cu_reshaped, self.labels_image1_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
-        self.decision_tree_evaluator.get_labels_forest(self.m2, depth_image_cu_reshaped, self.labels_image2_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
-
-        self.mean_shift.make_composite_labels_image(
-            self.labels_images_ptrs_cu,
-            self.DIM_X,
-            self.DIM_Y,
-            self.labels_conditions_cu,
-            self.labels_image_composite_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
-        
-        label_means = self.mean_shift.run(
-            6,
-            self.labels_image_composite_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)),
-            self.NUM_COMPOSITE_CLASSES,
-            self.mean_shift_variances_cu)
-
         # generate RGB image for debugging!
         self.labels_image_rgba_cu.fill(np.uint8(0))
-        self.points_ops.make_rgba_from_labels(
-            np.uint32(self.DIM_X),
-            np.uint32(self.DIM_Y),
-            np.uint32(self.NUM_COMPOSITE_CLASSES),
-            self.labels_image_composite_cu.cu(),
-            self.labels_colors_cu,
-            self.labels_image_rgba_cu,
-            grid = ((self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1, 1),
-            block = (32,32,1))
 
-        self.labels_image_rgba_cu.get(self.labels_image_rgba_cpu)
-
-        for m in label_means:
-            if not math.isnan(m[0]):
-                my = int(m[1])
-                mx = int(m[0])
-                if my > 0 and my < self.DIM_Y - 1 and mx > 0 and mx < self.DIM_X - 1:
-                    self.labels_image_rgba_cpu[my, mx, :] = np.array([255, 255, 255, 255], dtype=np.uint8)
-                    self.labels_image_rgba_cpu[my+1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-                    self.labels_image_rgba_cpu[my-1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-                    self.labels_image_rgba_cpu[my, mx+1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-                    self.labels_image_rgba_cpu[my, mx-1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-        self.labels_image_rgba_tex.set(self.labels_image_rgba_cpu)
-
-        pts_cpu = self.pts_cu.cu().get()
-
-        for f_idx in self.fingertip_idxes:
-            px, py = label_means[f_idx-1].astype(np.int)
-            if px < 0 or py < 0 or px >= self.DIM_X or py >= self.DIM_Y:
-                self.fingertip_positions[f_idx].clear()
-                self.set_fingertip_state(f_idx, False)
-            else:
-                d = pts_cpu[py, px]
-                d_z = -d[2]
-                self.fingertip_positions[f_idx].append(d_z)
-                while len(self.fingertip_positions[f_idx]) > self.MAX_FINGERTIP_POSITIONS:
-                    self.fingertip_positions[f_idx].pop(0)
-            
-                if len(self.fingertip_positions[f_idx]) > 10: # arbitrary..
-                    last_pos = self.fingertip_positions[f_idx][-1]
-                    if last_pos < self.fingertip_thresholds[f_idx]:
-                        self.set_fingertip_state(f_idx, True)
-                    else:
-                        self.set_fingertip_state(f_idx, False)
+        self.run_per_hand_pipeline(1, False)
 
         imgui.text('running!')
 
@@ -471,27 +522,27 @@ class RunLiveMultiApp(AppBase):
         graph_dim_y = 150.
         graph_scale_z = 500.
 
-        for i, f_idx in zip(range(len(self.fingertip_idxes)), self.fingertip_idxes):
+        for i in range(len(self.fingertip_idxes)):
 
             imgui.set_cursor_pos((c_x + ((graph_dim_x + graph_pad_x) * i), c_y))
 
-            if len(self.fingertip_positions[f_idx]) > 0:
-                a = np.array(self.fingertip_positions[f_idx], dtype=np.float32)
+            if len(self.hand_state.fingertips[i].positions) > 0:
+                a = np.array(self.hand_state.fingertips[i].positions, dtype=np.float32)
             else:
                 a = np.array([0], dtype=np.float32)
 
 
             cursor_pos = imgui.get_cursor_screen_pos()
 
-            imgui.plot_lines(f'##f{f_idx} pos',
+            imgui.plot_lines(f'##f{i} pos',
                 a,
                 scale_max=graph_scale_z,
                 scale_min=0.,
                 graph_size=(graph_dim_x, graph_dim_y))
 
-            f_threshold = self.fingertip_thresholds[f_idx]
+            f_threshold = self.hand_state.fingertips[i].z_thresh
 
-            if self.fingertip_states[f_idx]:
+            if self.hand_state.fingertips[i].note_on:
                 thresh_color = imgui.get_color_u32_rgba(0.3,1,0.8,0.30)
             else:
                 thresh_color = imgui.get_color_u32_rgba(0.3,1,0.8,0.05)
