@@ -25,6 +25,9 @@ class AppBase():
         self.window = glfw.create_window(width, height, title, None, None)
         glfw.make_context_current(self.window)
 
+        # glfwSwapInterval( 0 );
+        glfw.swap_interval(0)
+
         imgui.create_context()
         self.imgui = GlfwRenderer(self.window)
         self.imgui_io = imgui.get_io()
@@ -33,7 +36,7 @@ class AppBase():
         self.imgui_io.font_global_scale = 2.0
 
         import pycuda.autoinit
-        pycuda.gl.make_context(pycuda.autoinit.device)
+        self.cu_ctx = pycuda.gl.make_context(pycuda.autoinit.device)
 
         # splash/loading screen..
         glfw.poll_events()

@@ -4,6 +4,7 @@ import pyrealsense2 as rs
 import numpy as np
 import cv2
 import math
+import time
 
 import pycuda.driver as cu
 
@@ -23,10 +24,6 @@ import rtmidi
 
 from engine.window import AppBase
 from engine.buffer import GpuBuffer
-
-
-# note_on = lambda n,v: [0x90, n, v]
-# note_off = lambda n: [0x80, n, 0]
 
 
 class FingertipState:
@@ -80,9 +77,39 @@ class HandState:
             midi_note) for z_thresh, midi_note in defaults]
 
 
+class ProfileTimer:
+    def __init__(self):
+        self.events = [] # (name|None, start time)
+
+    def record(self, name):
+        self.events.append((name, time.perf_counter()))
+
+    def render(self):
+        self.record(None)
+        e = []
+        max_chars = max([len(n) if n else 0 for n, _ in self.events])
+        for i in range(len(self.events) - 1):
+            name, start_time = self.events[i]
+            _, end_time = self.events[i+1]
+            t = (end_time - start_time) * 1000
+            e.append(f'{name.ljust(max_chars)}: {"%.2f" % t} ms')
+
+        total_time = (self.events[-1][1] - self.events[0][1]) * 1000
+        e.append(f'{"total time".ljust(max_chars)}: {"%.2f" % total_time}')
+
+        self.clear()
+        return e
+
+    def clear(self):
+        self.events.clear()
+
+
+
 class RunLiveMultiApp(AppBase):
     def __init__(self):
         super().__init__(title="Test-icles", width=1920, height=1500)
+
+        self.t = ProfileTimer()
 
         parser = argparse.ArgumentParser(description='Train a classifier RDF for depth images')
         parser.add_argument('-m0', '--model0', nargs='?', required=True, type=str, help='Path to .npy model input file for arm/hand/fingers/thumb')
@@ -141,12 +168,10 @@ class RunLiveMultiApp(AppBase):
             profile.get_device().as_playback().set_real_time(False)
         depth_profile = profile.get_stream(rs.stream.depth).as_video_stream_profile()
         depth_intrin = depth_profile.get_intrinsics()
+        self.depth_intrin = depth_intrin
 
         self.DIM_X = depth_intrin.width
         self.DIM_Y = depth_intrin.height
-
-        # b = (1024, 1, 1)
-        # g = make_grid((self.DIM_X * self.DIM_Y, 1, 1), b)
 
         self.FOCAL = depth_intrin.fx
         self.PP = np.array([depth_intrin.ppx, depth_intrin.ppy], dtype=np.float32)
@@ -155,7 +180,7 @@ class RunLiveMultiApp(AppBase):
         self.depth_image_cu_2 = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.depth_image_group_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
-        self.depth_mm_level = 3
+        self.depth_mm_level = 4
         self.depth_mm3_dims = (self.DIM_Y // (1<<self.depth_mm_level), self.DIM_X // (1<<self.depth_mm_level))
         self.depth_image_cu_mm3 = GpuBuffer(self.depth_mm3_dims, dtype=np.uint16)
         self.depth_image_cu_mm3_groups = GpuBuffer(self.depth_mm3_dims, dtype=np.uint16)
@@ -172,8 +197,8 @@ class RunLiveMultiApp(AppBase):
         self.depth_image_rgba_gpu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
         self.depth_image_rgba_gpu_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
-        self.labels_image_rgba_cpu = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
-        self.labels_image_rgba_cu = cu_array.to_gpu(self.labels_image_rgba_cpu)
+        # self.labels_image_rgba_cpu = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
+        self.labels_image_rgba_cu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
 
         self.mean_shift = MeanShift()
 
@@ -277,11 +302,12 @@ class RunLiveMultiApp(AppBase):
 
         self.gauss_sigma = 2.5
 
-        # self.last_t = 
 
     def run_per_hand_pipeline(self, g_id, flip_x):
 
-        # self.depth_image_cu_2.set(self.depth_image_cu)
+        # self.cu_ctx.synchronize()
+        # self.t.record('--preprocessing')
+
         self.depth_image_group_cu.cu().fill(0)
 
         self.points_ops.stencil_depth_image_by_group(
@@ -325,10 +351,16 @@ class RunLiveMultiApp(AppBase):
         self.labels_image2_cu.cu().fill(MAX_UINT16)
         self.labels_image_composite_cu.cu().fill(MAX_UINT16)
 
+        # self.cu_ctx.synchronize()
+        # self.t.record('--evals')
+
         depth_image_cu_reshaped = self.depth_image_cu_2.cu().reshape((1, self.DIM_Y, self.DIM_X))
         self.decision_tree_evaluator.get_labels_forest(self.m0, depth_image_cu_reshaped, self.labels_image0_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
         self.decision_tree_evaluator.get_labels_forest(self.m1, depth_image_cu_reshaped, self.labels_image1_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
         self.decision_tree_evaluator.get_labels_forest(self.m2, depth_image_cu_reshaped, self.labels_image2_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
+
+        # self.cu_ctx.synchronize()
+        # self.t.record('--composite labels')
 
         self.mean_shift.make_composite_labels_image(
             self.labels_images_ptrs_cu,
@@ -345,12 +377,18 @@ class RunLiveMultiApp(AppBase):
                 self.labels_image_composite_cu.cu(),
                 grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
                 block=(32, 32, 1))
-        
+
+        # self.cu_ctx.synchronize()
+        # self.t.record('--mean shift')
+
         label_means = self.mean_shift.run(
-            6,
+            4,
             self.labels_image_composite_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)),
             self.NUM_COMPOSITE_CLASSES,
             self.mean_shift_variances_cu)
+
+        # self.cu_ctx.synchronize()
+        # self.t.record('--rgba')
 
         self.points_ops.make_rgba_from_labels(
             np.uint32(self.DIM_X),
@@ -358,11 +396,18 @@ class RunLiveMultiApp(AppBase):
             np.uint32(self.NUM_COMPOSITE_CLASSES),
             self.labels_image_composite_cu.cu(),
             self.labels_colors_cu,
-            self.labels_image_rgba_cu,
+            self.labels_image_rgba_cu.cu(),
             grid = ((self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1, 1),
             block = (32,32,1))
 
+
+        """
         self.labels_image_rgba_cu.get(self.labels_image_rgba_cpu)
+
+        # add labels to debug rgba image to show where calculated fingertips are
+
+        # self.cu_ctx.synchronize()
+        # self.t.record('--more rgba')
 
         for m in label_means:
             if not math.isnan(m[0]):
@@ -376,8 +421,10 @@ class RunLiveMultiApp(AppBase):
                     self.labels_image_rgba_cpu[my, mx-1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
 
         self.labels_image_rgba_tex.set(self.labels_image_rgba_cpu)
+        """
 
-        pts_cpu = self.pts_cu.cu().get()
+        # self.cu_ctx.synchronize()
+        # self.t.record('--pts analysis')
 
         if flip_x:
             # left hand
@@ -392,14 +439,21 @@ class RunLiveMultiApp(AppBase):
             if px < 0 or py < 0 or px >= self.DIM_X or py >= self.DIM_Y:
                 hand_state.fingertips[i].reset_positions()
             else:
-                d = pts_cpu[py, px]
-                d_z = -d[2]
-                hand_state.fingertips[i].next_z_pos(d_z)
+                # z value for depth.
+                # look up in original depth image, convert to plane space, get -z coordinate
+                z = self.depth_image[py, px]
+                pt = rs.rs2_deproject_pixel_to_point(self.depth_intrin, [px, py], z)
+                pt.append(1.)
+                pt = self.calibrated_plane.plane @ pt
+                pt_z = -pt[2]
+                hand_state.fingertips[i].next_z_pos(pt_z)
 
     def splash(self):
         imgui.text('loading...')
     
-    def tick(self, t):
+    def tick(self, _):
+
+        self.t.record('initial processing')
 
         # Wait for a coherent pair of frames: depth and color
         frames = self.pipeline.wait_for_frames()
@@ -416,8 +470,8 @@ class RunLiveMultiApp(AppBase):
             return
 
         # Convert images to numpy arrays
-        depth_image = np.asanyarray(depth_frame.get_data())
-        self.depth_image_cu.cu().set(depth_image)
+        self.depth_image = np.asanyarray(depth_frame.get_data())
+        self.depth_image_cu.cu().set(self.depth_image)
 
         block_dim = (1,32,32)
         grid_dim = make_grid((1, self.DIM_X, self.DIM_Y), block_dim)
@@ -472,7 +526,7 @@ class RunLiveMultiApp(AppBase):
                 self.depth_image_cu,
                 sigma=self.gauss_sigma,
                 k_size=11)
-        
+
         # make smaller depth image. faster to copy and process cpu-side
         self.points_ops.shrink_image(
             np.array((self.DIM_X, self.DIM_Y), dtype=np.int32),
@@ -482,7 +536,16 @@ class RunLiveMultiApp(AppBase):
             grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
             block=(32, 32, 1))
 
-        right_group, left_group = self.points_ops.get_pixel_groups_cpu(self.depth_image_cu_mm3.cu().get())
+
+        self.t.record('synchronize.., copy to CPU')
+
+        depth_image_mm3 = self.depth_image_cu_mm3.cu().get()
+
+        self.t.record('make pixel groups')
+
+        right_group, left_group = self.points_ops.get_pixel_groups_cpu(depth_image_mm3)
+
+        self.t.record('copy pixel groups to image')
 
         pixel_groups_img = np.zeros(self.depth_image_cu_mm3.shape, dtype=np.uint16)
 
@@ -495,16 +558,31 @@ class RunLiveMultiApp(AppBase):
                 pixel_groups_img[py, px] = 2
 
         # self.depth_image_cu_mm3_groups.cu().set(pixel_groups_img)
-        self.depth_image_cu_mm3_groups_2.cu().set(pixel_groups_img)
+
+        # self.depth_image
+
+        # for _ in range(2):
+        # self.depth_image_cu_mm3_groups_2.cu().set(pixel_groups_img)
         self.depth_image_cu_mm3_groups.cu().set(pixel_groups_img)
 
+        # grow twice!
+
+        # 1 to 2
+        self.points_ops.grow_groups(
+            np.array([self.depth_mm3_dims[1], self.depth_mm3_dims[0]], dtype=np.int32),
+            self.depth_image_cu_mm3_groups.cu(),
+            self.depth_image_cu_mm3_groups_2.cu(),
+            grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
+            block=(32, 32, 1))
+        
+        # 2 to 1
         self.points_ops.grow_groups(
             np.array([self.depth_mm3_dims[1], self.depth_mm3_dims[0]], dtype=np.int32),
             self.depth_image_cu_mm3_groups_2.cu(),
             self.depth_image_cu_mm3_groups.cu(),
             grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
             block=(32, 32, 1))
-        
+
         self.points_ops.make_depth_rgba(
             np.array([self.depth_mm3_dims[1], self.depth_mm3_dims[0]], dtype=np.int32),
             np.uint16(0),
@@ -517,11 +595,20 @@ class RunLiveMultiApp(AppBase):
         self.depth_image_cu_mm3_rbga_tex.copy_from_gpu_buffer(self.depth_image_cu_mm3_rbga)
 
         # generate RGB image for debugging!
-        self.labels_image_rgba_cu.fill(np.uint8(0))
+        self.labels_image_rgba_cu.cu().fill(np.uint8(0))
+
+        self.t.record('per-hand pipeline 1')
 
         self.run_per_hand_pipeline(1, False)
+
+        self.t.record('per-hand pipeline 2')
+
         self.run_per_hand_pipeline(2, True)
 
+        self.t.record('imgui')
+
+        self.labels_image_rgba_tex.copy_from_gpu_buffer(self.labels_image_rgba_cu)
+        
         imgui.text('running!')
 
         if imgui.button('recalibrate'):
@@ -573,10 +660,15 @@ class RunLiveMultiApp(AppBase):
 
         _, self.gauss_sigma = imgui.slider_float('depth sgma', self.gauss_sigma, 0., 10.)
 
-        imgui.image(self.depth_image_cu_mm3_rbga_tex.gl(), self.DIM_X / 2., self.DIM_Y / 2.)
-        imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X, self.DIM_Y)
+        # imgui.image(self.depth_image_cu_mm3_rbga_tex.gl(), self.DIM_X / 2., self.DIM_Y / 2.)
+        # imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X, self.DIM_Y)
 
-        imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 1.5, self.DIM_Y * 1.5)
+        imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 1.2, self.DIM_Y * 1.2)
+
+        times = self.t.render()
+        imgui.begin('profile timer')
+        for t in times:
+            imgui.text(t)
 
         imgui.plot_lines('ms per frame',
             np.array(self.ms_per_frame_log, dtype=np.float32),
@@ -589,6 +681,8 @@ class RunLiveMultiApp(AppBase):
             scale_max=100.,
             scale_min=0.,
             graph_size=(300,200))
+
+        imgui.end()
 
         self.frame_num += 1
 

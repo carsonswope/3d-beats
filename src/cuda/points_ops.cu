@@ -432,6 +432,8 @@ void grow_groups(
             return;
         }
     }
+
+    g_out.set({y, x}, 0);
 }}
 
 
