@@ -11,6 +11,10 @@ This is still a work in process, but here's a gif of the classifier in action:
 
 # TODOs:
 
+- write group finding extension in c++. this code shouldn't be slow, but it is in python
+- velocity:
+  - ignore taps below a certain velocity
+  - option to vary midi notes' velocity with velocity of tap
 - ignore fingertips that are not featured prominently / or have high variance from mean shift
 - auto-tuning of plane / z threshold. should be able to determine best z threshold automatically
 - add thumb sections to multi-level RDF architecture.

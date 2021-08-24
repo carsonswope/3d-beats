@@ -209,9 +209,14 @@ class LayeredDecisionForest():
         labels_conditions = np.array(cfg['conditions'], dtype=np.int32)
         self.labels_conditions_cu = GpuBuffer(labels_conditions.shape, dtype=np.int32)
         self.labels_conditions_cu.cu().set(labels_conditions)
-
         # max class id from conditions config
         self.num_layered_classes = max([c[1] for c in filter(lambda c:c[0] == 0, labels_conditions)])
+
+        label_colors = np.array(cfg['label_colors'], dtype=np.uint8)
+        assert label_colors.shape == (self.num_layered_classes, 4)
+        self.label_colors = GpuBuffer(label_colors.shape, dtype=np.uint8)
+        self.label_colors.cu().set(label_colors)
+
 
     def run(self, depth_image, labels_image):
 
