@@ -165,10 +165,7 @@ class RunLiveMultiApp(AppBase):
         self.t = ProfileTimer()
 
         parser = argparse.ArgumentParser(description='Train a classifier RDF for depth images')
-        parser.add_argument('-m0', '--model0', nargs='?', required=True, type=str, help='Path to .npy model input file for arm/hand/fingers/thumb')
-        parser.add_argument('-m1', '--model1', nargs='?', required=True, type=str, help='Path to .npy model input file for bones 1-2-3 on fingers')
-        parser.add_argument('-m2', '--model2', nargs='?', required=True, type=str, help='Path to .npy model input file for fingers 1-2-3-4')
-        # parser.add_argument('-d', '--data', nargs='?', required=True, type=str, help='Directory holding data')
+        parser.add_argument('-cfg', nargs='?', required=True, type=str, help='Path to the layered decision forest config file')
         parser.add_argument('--rs_bag', nargs='?', required=False, type=str, help='Path to optional input realsense .bag file to use instead of live camera stream')
         parser.add_argument('--plane_num_iterations', nargs='?', required=False, type=int, help='Num random planes to propose looking for best fit')
         # parser.add_argument('--plane_z_threshold', nargs='?', required=True, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
@@ -188,12 +185,10 @@ class RunLiveMultiApp(AppBase):
         self.calibrate_next_frame = False
 
         print('loading forest')
-        self.m0 = DecisionForest.load(args.model0)
-        self.m1 = DecisionForest.load(args.model1)
-        self.m2 = DecisionForest.load(args.model2)
 
-        print('compiling CUDA kernels..')
-        self.decision_tree_evaluator = DecisionTreeEvaluator()
+        self.layered_rdf = LayeredDecisionForest.load(args.cfg, (480, 848))
+
+        # print('compiling CUDA kernels..')
         self.points_ops = PointsOps()
 
         print('initializing camera..')
@@ -241,77 +236,21 @@ class RunLiveMultiApp(AppBase):
         self.depth_image_cu_mm3_rbga = GpuBuffer(self.depth_mm3_dims + (4,), dtype=np.uint8)
         self.depth_image_cu_mm3_rbga_tex = GpuTexture((self.depth_mm3_dims[1], self.depth_mm3_dims[0]), (GL_RGBA, GL_UNSIGNED_BYTE))
 
-        self.labels_image0_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
-        self.labels_image1_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
-        self.labels_image2_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.labels_image_composite_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.labels_image_composite_cu_2 = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
         self.depth_image_rgba_gpu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
         self.depth_image_rgba_gpu_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
-        # self.labels_image_rgba_cpu = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
+        self.labels_image_rgba_cpu = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
         self.labels_image_rgba_cu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
 
         self.mean_shift = MeanShift()
 
-        self.labels_images_ptrs = cu.pagelocked_zeros((3,), dtype=np.int64)
-        self.labels_images_ptrs[0] = self.labels_image0_cu.cu().__cuda_array_interface__['data'][0]
-        self.labels_images_ptrs[1] = self.labels_image2_cu.cu().__cuda_array_interface__['data'][0]
-        self.labels_images_ptrs[2] = self.labels_image1_cu.cu().__cuda_array_interface__['data'][0]
-        self.labels_images_ptrs_cu = cu_array.to_gpu(self.labels_images_ptrs)
-
-        mean_shift_variances = np.array([
-            100.,
-            40.,
-            60.,
-            50.,
-            50.,
-            50.,
-            50.,
-            50.,
-            50.,
-            50.,
-            50.,
-            50.,
-            50.,
-            50.,
-            50.], dtype=np.float32)
+        mean_shift_variances = np.array(
+            [100., 40., 60., 50., 50., 50., 50., 50., 50., 50., 50., 50., 50., 50., 50.],
+            dtype=np.float32)
         self.mean_shift_variances_cu = cu_array.to_gpu(mean_shift_variances)
-
-        # encoded instructions for making composite labels image using all generated labels images
-        # essentially a mini decision-tree
-        labels_conditions = np.array([
-            # img 1
-            [0, 1], # if label 1, ID 1
-            [0, 2], # if label 2, ID 2
-            [1, 4], # if label 3, look at next img. root of that tree @ IDX 4
-            [0, 3], # if label 4, ID 3
-            # img 1 == 3 , img 2. keep looking, this determines which finger
-            [1, 8],
-            [1, 11],
-            [1, 14],
-            [1, 17],
-            # next 4 branches determines which knuckle!
-            # img 1 == 3, img 2 == 1, img 3
-            [0, 4],
-            [0, 5],
-            [0, 6],
-            # img 1 == 3, img 2 == 2, img 3
-            [0, 7],
-            [0, 8],
-            [0, 9],
-            # img 1 == 3, img 2 == 3, img 3
-            [0, 10],
-            [0, 11],
-            [0, 12],
-            # img 1 == 3, img 2 == 4, img 3
-            [0, 13],
-            [0, 14],
-            [0, 15],
-        ], dtype=np.int32)
-        self.labels_conditions_cu = cu_array.to_gpu(labels_conditions)
-        self.NUM_COMPOSITE_CLASSES = 15 # 1-15
 
         self.fingertip_idxes = [5, 8, 11, 14]
 
@@ -354,155 +293,6 @@ class RunLiveMultiApp(AppBase):
         self.frame_num = 0
 
         self.gauss_sigma = 2.5
-
-
-    def run_per_hand_pipeline(self, g_id, flip_x):
-
-        # self.cu_ctx.synchronize()
-        # self.t.record('--preprocessing')
-
-        self.depth_image_group_cu.cu().fill(0)
-
-        self.points_ops.stencil_depth_image_by_group(
-            np.array([self.DIM_X, self.DIM_Y], dtype=np.int32),
-            np.int32(self.depth_mm_level),
-            np.int32(g_id),
-            self.depth_image_cu_mm3_groups.cu(),
-            self.depth_image_cu.cu(),
-            self.depth_image_group_cu.cu(),
-            grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
-            block=(32, 32, 1))
-
-        if flip_x:
-            self.points_ops.flip_x(
-                np.array([self.DIM_X, self.DIM_Y], dtype=np.int32),
-                self.depth_image_group_cu.cu(),
-                self.depth_image_cu_2.cu(),
-                grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
-                block=(32, 32, 1))
-        else:
-            self.depth_image_cu_2.cu().set(self.depth_image_group_cu.cu())
-
-        self.points_ops.convert_0s_to_maxuint(
-            np.int32(self.DIM_X * self.DIM_Y),
-            self.depth_image_cu_2.cu(),
-            grid=make_grid((self.DIM_X * self.DIM_Y, 1, 1), (1024, 1, 1)),
-            block=(1024, 1, 1))
-
-        self.points_ops.make_depth_rgba(
-            np.array((self.DIM_X, self.DIM_Y), dtype=np.int32),
-            np.uint16(2000),
-            np.uint16(6000),
-            self.depth_image_cu_2.cu(),
-            self.depth_image_rgba_gpu.cu(),
-            grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
-            block=(32, 32, 1))
-        self.depth_image_rgba_gpu_tex.copy_from_gpu_buffer(self.depth_image_rgba_gpu)
-
-        self.labels_image0_cu.cu().fill(MAX_UINT16)
-        self.labels_image1_cu.cu().fill(MAX_UINT16)
-        self.labels_image2_cu.cu().fill(MAX_UINT16)
-        self.labels_image_composite_cu.cu().fill(MAX_UINT16)
-
-        # self.cu_ctx.synchronize()
-        # self.t.record('--evals')
-
-        depth_image_cu_reshaped = self.depth_image_cu_2.cu().reshape((1, self.DIM_Y, self.DIM_X))
-        self.decision_tree_evaluator.get_labels_forest(self.m0, depth_image_cu_reshaped, self.labels_image0_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
-        self.decision_tree_evaluator.get_labels_forest(self.m1, depth_image_cu_reshaped, self.labels_image1_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
-        self.decision_tree_evaluator.get_labels_forest(self.m2, depth_image_cu_reshaped, self.labels_image2_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
-
-        # self.cu_ctx.synchronize()
-        # self.t.record('--composite labels')
-
-        self.mean_shift.make_composite_labels_image(
-            self.labels_images_ptrs_cu,
-            self.DIM_X,
-            self.DIM_Y,
-            self.labels_conditions_cu,
-            self.labels_image_composite_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)))
-
-        if flip_x:
-            self.labels_image_composite_cu_2.cu().set(self.labels_image_composite_cu.cu())
-            self.points_ops.flip_x(
-                np.array([self.DIM_X, self.DIM_Y], dtype=np.int32),
-                self.labels_image_composite_cu_2.cu(),
-                self.labels_image_composite_cu.cu(),
-                grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
-                block=(32, 32, 1))
-
-        # self.cu_ctx.synchronize()
-        # self.t.record('--mean shift')
-
-        label_means = self.mean_shift.run(
-            4,
-            self.labels_image_composite_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)),
-            self.NUM_COMPOSITE_CLASSES,
-            self.mean_shift_variances_cu)
-
-        # self.cu_ctx.synchronize()
-        # self.t.record('--rgba')
-
-        self.points_ops.make_rgba_from_labels(
-            np.uint32(self.DIM_X),
-            np.uint32(self.DIM_Y),
-            np.uint32(self.NUM_COMPOSITE_CLASSES),
-            self.labels_image_composite_cu.cu(),
-            self.labels_colors_cu,
-            self.labels_image_rgba_cu.cu(),
-            grid = ((self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1, 1),
-            block = (32,32,1))
-
-        # self.points_ops.add_fingertip_labels(
-            # np.array()
-        # )
-
-        """
-        self.labels_image_rgba_cu.get(self.labels_image_rgba_cpu)
-
-        # add labels to debug rgba image to show where calculated fingertips are
-
-        # self.cu_ctx.synchronize()
-        # self.t.record('--more rgba')
-
-        for m in label_means:
-            if not math.isnan(m[0]):
-                my = int(m[1])
-                mx = int(m[0])
-                if my > 0 and my < self.DIM_Y - 1 and mx > 0 and mx < self.DIM_X - 1:
-                    self.labels_image_rgba_cpu[my, mx, :] = np.array([255, 255, 255, 255], dtype=np.uint8)
-                    self.labels_image_rgba_cpu[my+1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-                    self.labels_image_rgba_cpu[my-1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-                    self.labels_image_rgba_cpu[my, mx+1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-                    self.labels_image_rgba_cpu[my, mx-1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
-
-        self.labels_image_rgba_tex.set(self.labels_image_rgba_cpu)
-        """
-
-        # self.cu_ctx.synchronize()
-        # self.t.record('--pts analysis')
-
-        if flip_x:
-            # left hand
-            hand_state = self.hand_states[1]
-        else:
-            # right hand
-            hand_state = self.hand_states[0]
-
-        for i, f_idx in zip(range(len(self.fingertip_idxes)), self.fingertip_idxes):
-
-            px, py = label_means[f_idx-1].astype(np.int)
-            if px < 0 or py < 0 or px >= self.DIM_X or py >= self.DIM_Y:
-                hand_state.fingertips[i].reset_positions()
-            else:
-                # z value for depth.
-                # look up in original depth image, convert to plane space, get -z coordinate
-                z = self.depth_image[py, px]
-                pt = rs.rs2_deproject_pixel_to_point(self.depth_intrin, [px, py], z)
-                pt.append(1.)
-                pt = self.calibrated_plane.plane @ pt
-                pt_z = -pt[2]
-                hand_state.fingertips[i].next_z_pos(pt_z)
 
     def splash(self):
         imgui.text('loading...')
@@ -704,6 +494,133 @@ class RunLiveMultiApp(AppBase):
         imgui.end()
 
         self.frame_num += 1
+
+
+    def run_per_hand_pipeline(self, g_id, flip_x):
+
+        # self.cu_ctx.synchronize()
+        # self.t.record('--preprocessing')
+
+        self.depth_image_group_cu.cu().fill(0)
+
+        self.points_ops.stencil_depth_image_by_group(
+            np.array([self.DIM_X, self.DIM_Y], dtype=np.int32),
+            np.int32(self.depth_mm_level),
+            np.int32(g_id),
+            self.depth_image_cu_mm3_groups.cu(),
+            self.depth_image_cu.cu(),
+            self.depth_image_group_cu.cu(),
+            grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
+            block=(32, 32, 1))
+
+        if flip_x:
+            self.points_ops.flip_x(
+                np.array([self.DIM_X, self.DIM_Y], dtype=np.int32),
+                self.depth_image_group_cu.cu(),
+                self.depth_image_cu_2.cu(),
+                grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
+                block=(32, 32, 1))
+        else:
+            self.depth_image_cu_2.cu().set(self.depth_image_group_cu.cu())
+
+        self.points_ops.convert_0s_to_maxuint(
+            np.int32(self.DIM_X * self.DIM_Y),
+            self.depth_image_cu_2.cu(),
+            grid=make_grid((self.DIM_X * self.DIM_Y, 1, 1), (1024, 1, 1)),
+            block=(1024, 1, 1))
+
+        self.points_ops.make_depth_rgba(
+            np.array((self.DIM_X, self.DIM_Y), dtype=np.int32),
+            np.uint16(2000),
+            np.uint16(6000),
+            self.depth_image_cu_2.cu(),
+            self.depth_image_rgba_gpu.cu(),
+            grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
+            block=(32, 32, 1))
+        self.depth_image_rgba_gpu_tex.copy_from_gpu_buffer(self.depth_image_rgba_gpu)
+
+        self.labels_image_composite_cu.cu().fill(MAX_UINT16)
+
+        # self.cu_ctx.synchronize()
+        # self.t.record('--evals')
+
+        self.layered_rdf.run(self.depth_image_cu_2, self.labels_image_composite_cu)
+
+        if flip_x:
+            self.labels_image_composite_cu_2.cu().set(self.labels_image_composite_cu.cu())
+            self.points_ops.flip_x(
+                np.array([self.DIM_X, self.DIM_Y], dtype=np.int32),
+                self.labels_image_composite_cu_2.cu(),
+                self.labels_image_composite_cu.cu(),
+                grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
+                block=(32, 32, 1))
+
+        # self.cu_ctx.synchronize()
+        # self.t.record('--mean shift')
+
+        label_means = self.mean_shift.run(
+            4,
+            self.labels_image_composite_cu.cu().reshape((1, self.DIM_Y, self.DIM_X)),
+            self.layered_rdf.num_layered_classes,
+            self.mean_shift_variances_cu)
+
+        # self.cu_ctx.synchronize()
+        # self.t.record('--rgba')
+
+        self.points_ops.make_rgba_from_labels(
+            np.uint32(self.DIM_X),
+            np.uint32(self.DIM_Y),
+            np.uint32(self.layered_rdf.num_layered_classes),
+            self.labels_image_composite_cu.cu(),
+            self.labels_colors_cu,
+            self.labels_image_rgba_cu.cu(),
+            grid = ((self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1, 1),
+            block = (32,32,1))
+
+        self.cu_ctx.synchronize()
+        self.t.record('--more rgba')
+
+        # todo: this is slow! too much copying back and forth on CPU
+        # add labels to debug rgba image to show where calculated fingertips are
+        self.labels_image_rgba_cu.cu().get(self.labels_image_rgba_cpu)
+
+        for m in label_means:
+            if not math.isnan(m[0]):
+                my = int(m[1])
+                mx = int(m[0])
+                if my > 0 and my < self.DIM_Y - 1 and mx > 0 and mx < self.DIM_X - 1:
+                    self.labels_image_rgba_cpu[my, mx, :] = np.array([255, 255, 255, 255], dtype=np.uint8)
+                    self.labels_image_rgba_cpu[my+1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                    self.labels_image_rgba_cpu[my-1, mx, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                    self.labels_image_rgba_cpu[my, mx+1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+                    self.labels_image_rgba_cpu[my, mx-1, :] = np.array([0, 0, 0, 255], dtype=np.uint8)
+
+        self.labels_image_rgba_cu.cu().set(self.labels_image_rgba_cpu)
+        
+        # self.cu_ctx.synchronize()
+        # self.t.record('--pts analysis')
+
+        if flip_x:
+            # left hand
+            hand_state = self.hand_states[1]
+        else:
+            # right hand
+            hand_state = self.hand_states[0]
+
+        for i, f_idx in zip(range(len(self.fingertip_idxes)), self.fingertip_idxes):
+
+            px, py = label_means[f_idx-1].astype(np.int)
+            if px < 0 or py < 0 or px >= self.DIM_X or py >= self.DIM_Y:
+                hand_state.fingertips[i].reset_positions()
+            else:
+                # z value for depth.
+                # look up in original depth image, convert to plane space, get -z coordinate
+                z = self.depth_image[py, px]
+                pt = rs.rs2_deproject_pixel_to_point(self.depth_intrin, [px, py], z)
+                pt.append(1.)
+                pt = self.calibrated_plane.plane @ pt
+                pt_z = -pt[2]
+                hand_state.fingertips[i].next_z_pos(pt_z)
 
 
 if __name__ == '__main__':

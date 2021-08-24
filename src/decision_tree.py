@@ -1,3 +1,4 @@
+from cuda.mean_shift import MeanShift
 import cuda.py_nvcc_utils as py_nvcc_utils
 import json
 import numpy as np
@@ -6,6 +7,7 @@ import pycuda.gpuarray as cu_array
 import pycuda.driver as cu
 
 from compressed_blocks import *
+from engine.buffer import GpuBuffer
 
 from util import sizeof_fmt, MAX_UINT16
 
@@ -170,6 +172,69 @@ class DecisionForest():
 
         self.forest_cu = cu_array.GPUArray((self.num_trees, self.TOTAL_TREE_NODES, self.TREE_NODE_ELS), dtype=np.float32)
         self.forest_cu.fill(np.float32(0.))
+
+# comes with gpu memory 
+class LayeredDecisionForest():
+    @staticmethod
+    def load(config_filename, eval_dims):
+        cfg = json.loads(open(config_filename).read())
+        return LayeredDecisionForest(cfg, eval_dims)
+
+    def __init__(self, cfg, eval_dims):
+        self.mean_shift = MeanShift()
+
+        self.eval = DecisionTreeEvaluator()
+        self.eval_dims = eval_dims # y,x !!
+        self.m = [DecisionForest.load(m) for m in cfg['layers']]
+        self.num_models = len(self.m)
+
+        self.label_images = [GpuBuffer(eval_dims, dtype=np.uint16) for _ in range(self.num_models)]
+
+        self.labels_images_ptrs_cu = GpuBuffer((self.num_models,), dtype=np.int64)
+        label_images_ptrs = np.array([i.cu().__cuda_array_interface__['data'][0] for i in self.label_images], dtype=np.int64)
+        self.labels_images_ptrs_cu.cu().set(label_images_ptrs)
+
+        # format of conditions list is as follows.
+        # (0, PIXEL_ID)
+        #   OR
+        # (1, NEXT_IMG_CONDITION_OFFSET)
+
+        # example:
+        # conditions = [ (0, 1), (0, 2), (1, 3), (0, 3), (0, 4)]
+        # i0 i1 | ID
+        # 1  -  | 1
+        # 2  -  | 2
+        # 3  1  | 3
+        # 3  2  | 4
+        labels_conditions = np.array(cfg['conditions'], dtype=np.int32)
+        self.labels_conditions_cu = GpuBuffer(labels_conditions.shape, dtype=np.int32)
+        self.labels_conditions_cu.cu().set(labels_conditions)
+
+        # max class id from conditions config
+        self.num_layered_classes = max([c[1] for c in filter(lambda c:c[0] == 0, labels_conditions)])
+
+    def run(self, depth_image, labels_image):
+
+        # TODO: assert depth image dims!
+
+        for i in self.label_images:
+            i.cu().fill(MAX_UINT16)
+
+        # first dim: image id. only one image!
+        dims = (1,) + self.eval_dims
+
+        for m, i in zip(self.m, self.label_images):
+            self.eval.get_labels_forest(
+                m,
+                depth_image.cu().reshape(dims),
+                i.cu().reshape(dims))
+        
+        self.mean_shift.make_composite_labels_image(
+            self.labels_images_ptrs_cu.cu(),
+            self.eval_dims[1],
+            self.eval_dims[0],
+            self.labels_conditions_cu.cu(),
+            labels_image.cu().reshape(dims))
 
     # def eval()
 class DecisionTreeEvaluator():

@@ -11,14 +11,9 @@ This is still a work in process, but here's a gif of the classifier in action:
 
 # TODOs:
 
-- apply gaussian filter to incoming depth image for smoothing and downsampling (create /2, /4, /8 etc. mipmaps)
-- copy smaller depthmap back to cpu, use 'paint fill' to distinguish different 'hands' (contiguous sections in depth image after filtering by plane)
-- for each determined region:
-  - apply a right vs left classifier (on small mipmap). this can be trained on original training data (which are all right hands), and flip every other frame.
-  - if left, flip image before feeding to classifier
-  - apply full 16 class classifier pipeline, mean shift to find centers.
-  - make sure the main 'hand center' class features prominently (if not, discard region).
-  - make sure to also ignore fingertips that are not featured prominently
-
+- ignore fingertips that are not featured prominently / or have high variance from mean shift
 - auto-tuning of plane / z threshold. should be able to determine best z threshold automatically
-- add thumb sections to multi-level RDF architecture
+- add thumb sections to multi-level RDF architecture.
+- OR simpler 2-stage RDF architecture that simply identifies:
+  - 1. fingertip OR {rest of hand}
+  - 2. identify which fingertip
