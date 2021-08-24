@@ -28,8 +28,8 @@ from engine.buffer import GpuBuffer
 
 class FingertipState:
     def __init__(self, on_fn, off_fn, num_positions = 50, z_thresh = 150, midi_note = 36):
-        self.positions = []
         self.num_positions = num_positions
+        self.positions = [0 for _ in range(self.num_positions)]
 
         self.on_fn = on_fn
         self.off_fn = off_fn
@@ -40,7 +40,7 @@ class FingertipState:
     
     def reset_positions(self):
         # turn off note if on
-        self.positions.clear()
+        self.positions = [0 for _ in range(self.num_positions)]
         self.set_midi_state(False)
         pass
 
@@ -75,6 +75,59 @@ class HandState:
             num_positions,
             z_thresh,
             midi_note) for z_thresh, midi_note in defaults]
+    
+    def draw_imgui(self):
+
+        imgui.begin_group()
+
+        c_x, c_y = imgui.get_cursor_pos()
+        graph_dim_x = 300.
+        slider_dim_x = 35.
+
+        graph_pad = 15.
+        dim_y = 150.
+        graph_scale_z = 500.
+
+        for i in range(len(self.fingertips)):
+
+            c_x_start = c_x + ((graph_dim_x + graph_pad + slider_dim_x + graph_pad + graph_pad) * i)
+
+            imgui.set_cursor_pos((c_x_start, c_y))
+
+            if len(self.fingertips[i].positions) > 0:
+                a = np.array(self.fingertips[i].positions, dtype=np.float32)
+            else:
+                a = np.array([0], dtype=np.float32)
+
+
+            cursor_pos = imgui.get_cursor_screen_pos()
+
+            imgui.plot_lines(f'##f{i} pos',
+                a,
+                scale_max=graph_scale_z,
+                scale_min=0.,
+                graph_size=(graph_dim_x, dim_y))
+
+            f_threshold = self.fingertips[i].z_thresh
+
+            if self.fingertips[i].note_on:
+                thresh_color = imgui.get_color_u32_rgba(0.3,1,0.8,0.30)
+            else:
+                thresh_color = imgui.get_color_u32_rgba(0.3,1,0.8,0.05)
+
+            imgui.get_window_draw_list().add_rect_filled(
+                cursor_pos[0],
+                cursor_pos[1] + (dim_y * (1 - (f_threshold / graph_scale_z))),
+                cursor_pos[0] + graph_dim_x,
+                cursor_pos[1] + dim_y,
+                thresh_color)
+
+            imgui.set_cursor_pos((c_x_start + graph_dim_x + graph_pad, c_y))
+
+            _, self.fingertips[i].z_thresh = imgui.v_slider_float(f'##{i}', slider_dim_x, dim_y, self.fingertips[i].z_thresh, 25., 175.)
+
+        imgui.end_group()
+
 
 
 class ProfileTimer:
@@ -269,12 +322,12 @@ class RunLiveMultiApp(AppBase):
         self.hand_states = [
             HandState(
                 # defaults! (z_thresh, midi_note)
-                [(150., 36), (150., 37), (150., 38), (150., 39)],
+                [(148., 36), (148., 37), (148., 38), (135., 39)],
                 on_fn,
                 off_fn),
             HandState(
                 # defaults! (z_thresh, midi_note)
-                [(150., 40), (150., 41), (150., 42), (150., 43)],
+                [(148., 40), (148., 41), (148., 42), (135., 43)],
                 on_fn,
                 off_fn)]
 
@@ -400,6 +453,9 @@ class RunLiveMultiApp(AppBase):
             grid = ((self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1, 1),
             block = (32,32,1))
 
+        # self.points_ops.add_fingertip_labels(
+            # np.array()
+        # )
 
         """
         self.labels_image_rgba_cu.get(self.labels_image_rgba_cpu)
@@ -557,16 +613,9 @@ class RunLiveMultiApp(AppBase):
             for py, px in left_group:
                 pixel_groups_img[py, px] = 2
 
-        # self.depth_image_cu_mm3_groups.cu().set(pixel_groups_img)
-
-        # self.depth_image
-
-        # for _ in range(2):
-        # self.depth_image_cu_mm3_groups_2.cu().set(pixel_groups_img)
         self.depth_image_cu_mm3_groups.cu().set(pixel_groups_img)
 
         # grow twice!
-
         # 1 to 2
         self.points_ops.grow_groups(
             np.array([self.depth_mm3_dims[1], self.depth_mm3_dims[0]], dtype=np.int32),
@@ -574,7 +623,6 @@ class RunLiveMultiApp(AppBase):
             self.depth_image_cu_mm3_groups_2.cu(),
             grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
             block=(32, 32, 1))
-        
         # 2 to 1
         self.points_ops.grow_groups(
             np.array([self.depth_mm3_dims[1], self.depth_mm3_dims[0]], dtype=np.int32),
@@ -616,49 +664,20 @@ class RunLiveMultiApp(AppBase):
         else:
             self.calibrate_next_frame = False
 
-        _, self.PLANE_Z_OUTLIER_THRESHOLD = imgui.slider_float('z thresh', self.PLANE_Z_OUTLIER_THRESHOLD, 0., 100.)
+        _, self.PLANE_Z_OUTLIER_THRESHOLD = imgui.slider_float('plane threshold', self.PLANE_Z_OUTLIER_THRESHOLD, 0., 100.)
 
-        c_x, c_y = imgui.get_cursor_pos()
-        graph_dim_x = 400.
-        graph_pad_x = 10.
-        graph_dim_y = 150.
-        graph_scale_z = 500.
+        if imgui.tree_node('R'):
+            self.hand_states[0].draw_imgui()
+            imgui.tree_pop()
 
-        hand_state = self.hand_states[0]
+        if imgui.tree_node('L'):
+            self.hand_states[1].draw_imgui()
+            imgui.tree_pop()
 
-        for i in range(len(self.fingertip_idxes)):
-
-            imgui.set_cursor_pos((c_x + ((graph_dim_x + graph_pad_x) * i), c_y))
-
-            if len(hand_state.fingertips[i].positions) > 0:
-                a = np.array(hand_state.fingertips[i].positions, dtype=np.float32)
-            else:
-                a = np.array([0], dtype=np.float32)
+        imgui.text('-')
 
 
-            cursor_pos = imgui.get_cursor_screen_pos()
-
-            imgui.plot_lines(f'##f{i} pos',
-                a,
-                scale_max=graph_scale_z,
-                scale_min=0.,
-                graph_size=(graph_dim_x, graph_dim_y))
-
-            f_threshold = hand_state.fingertips[i].z_thresh
-
-            if hand_state.fingertips[i].note_on:
-                thresh_color = imgui.get_color_u32_rgba(0.3,1,0.8,0.30)
-            else:
-                thresh_color = imgui.get_color_u32_rgba(0.3,1,0.8,0.05)
-
-            imgui.get_window_draw_list().add_rect_filled(
-                cursor_pos[0],
-                cursor_pos[1] + (graph_dim_y * (1 - (f_threshold / graph_scale_z))),
-                cursor_pos[0] + graph_dim_x,
-                cursor_pos[1] + graph_dim_y,
-                thresh_color)
-
-        _, self.gauss_sigma = imgui.slider_float('depth sgma', self.gauss_sigma, 0., 10.)
+        # _, self.gauss_sigma = imgui.slider_float('depth sgma', self.gauss_sigma, 0., 10.)
 
         # imgui.image(self.depth_image_cu_mm3_rbga_tex.gl(), self.DIM_X / 2., self.DIM_Y / 2.)
         # imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X, self.DIM_Y)
