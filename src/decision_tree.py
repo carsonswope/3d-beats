@@ -183,7 +183,18 @@ class LayeredDecisionForest():
 
         self.eval = DecisionTreeEvaluator()
         self.eval_dims = eval_dims # y,x !!
-        self.m = [DecisionForest.load(m) for m in cfg['layers']]
+        self.m = []
+        for l in cfg['layers']:
+            m = DecisionForest.load(l['model'])
+            if 'filter_model' in l and 'filter_model_class in l':
+                filter_model = l['filter_model']
+                filter_model_class = l['filter_model_class']
+            else:
+                filter_model = None
+                filter_model_class = None
+            
+            self.m.append((m, filter_model, filter_model_class))
+        # self.m = [DecisionForest.load(m) for m in cfg['layers']]
         self.num_models = len(self.m)
 
         self.label_images = [GpuBuffer(eval_dims, dtype=np.uint16) for _ in range(self.num_models)]
@@ -228,11 +239,15 @@ class LayeredDecisionForest():
         # first dim: image id. only one image!
         dims = (1,) + self.eval_dims
 
-        for m, i in zip(self.m, self.label_images):
+        for i in range(self.num_models):
+            m, filter_model, filter_model_class = self.m[i]
+            single_labels_image = self.label_images[i]
+
+        # for m, i in zip(self.m, self.label_images):
             self.eval.get_labels_forest(
                 m,
                 depth_image.cu().reshape(dims),
-                i.cu().reshape(dims))
+                single_labels_image.cu().reshape(dims))
         
         self.eval.make_composite_labels_image(
             self.labels_images_ptrs_cu.cu(),
