@@ -75,7 +75,7 @@ class HandState:
         imgui.begin_group()
 
         c_x, c_y = imgui.get_cursor_pos()
-        graph_dim_x = 300.
+        graph_dim_x = 200.
         slider_dim_x = 50.
 
         graph_pad = 15.
@@ -127,6 +127,6 @@ class HandState:
 
             imgui.set_cursor_pos((c_x_start + graph_dim_x + graph_pad, c_y))
 
-            _, self.fingertips[i].z_thresh = imgui.v_slider_float(f'##{i}', slider_dim_x, dim_y, self.fingertips[i].z_thresh, 25., 175.)
+            _, self.fingertips[i].z_thresh = imgui.v_slider_float(f'##{i}', slider_dim_x, dim_y, self.fingertips[i].z_thresh, 25., 260.)
 
         imgui.end_group()

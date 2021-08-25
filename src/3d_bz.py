@@ -53,11 +53,11 @@ class App_3d_bz(AppBase):
         self.NUM_RANDOM_GUESSES = args.plane_num_iterations or 25000
         self.PLANE_Z_OUTLIER_THRESHOLD = 40.
 
-        self.DEFAULT_FINGERTIP_THRESHOLD = 140. # very generous threshold. will be refined by auto calibration
+        # self.DEFAULT_FINGERTIP_THRESHOLD = 140. # very generous threshold. will be refined by auto calibration
 
         self.gauss_sigma = 2.5
         self.z_thresh_offset = 25.
-        self.min_velocity = 15.
+        self.min_velocity = 5.
         
         self.group_min_size = 0.06
 
@@ -136,23 +136,18 @@ class App_3d_bz(AppBase):
             dtype=np.float32)
         self.mean_shift_variances = cu_array.to_gpu(mean_shift_variances)
 
-        self.fingertip_idxes = [5, 8, 11, 14]
+        self.fingertip_idxes = [2, 5, 8, 11, 14]
+        self.DEFAULT_FINGERTIP_THRESHOLDS = [240., 140., 140., 140., 140.]
+        # (z_thresh, midi_note)
+        init_hand_state = lambda n: [(self.DEFAULT_FINGERTIP_THRESHOLDS[i], n+i) for i in range(len(self.fingertip_idxes))]
 
         on_fn = lambda n,v: self.midi_out.send_message([0x90, n, v])
         off_fn = lambda n: self.midi_out.send_message([0x80, n, 0])
 
         # fingers: 0 = index, 1 = middle, 2 = ring, 3 = pinky
         self.hand_states = [
-            HandState(
-                # (z_thresh, midi_note)
-                [(self.DEFAULT_FINGERTIP_THRESHOLD, 36+i) for i in range(len(self.fingertip_idxes))],
-                on_fn,
-                off_fn),
-            HandState(
-                # (z_thresh, midi_note)
-                [(self.DEFAULT_FINGERTIP_THRESHOLD, 40+i) for i in range(len(self.fingertip_idxes))],
-                on_fn,
-                off_fn)]
+            HandState(init_hand_state(36), on_fn, off_fn),
+            HandState(init_hand_state(41), on_fn, off_fn)]
 
         self.frame_num = 0
 
@@ -321,8 +316,8 @@ class App_3d_bz(AppBase):
         # per finger calibration
         if imgui.button('reset fingertip calibration'):
             for h in self.hand_states:
-                for f in h.fingertips:
-                    f.z_thresh = self.DEFAULT_FINGERTIP_THRESHOLD
+                for f, t in zip(h.fingertips, self.DEFAULT_FINGERTIP_THRESHOLDS):
+                    f.z_thresh = t
 
         self.calibrate_next_frame = imgui.button('recalibrate')
 
