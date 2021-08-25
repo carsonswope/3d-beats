@@ -1,4 +1,3 @@
-from cuda.mean_shift import MeanShift
 import cuda.py_nvcc_utils as py_nvcc_utils
 import json
 import numpy as np
@@ -181,7 +180,6 @@ class LayeredDecisionForest():
         return LayeredDecisionForest(cfg, eval_dims)
 
     def __init__(self, cfg, eval_dims):
-        self.mean_shift = MeanShift()
 
         self.eval = DecisionTreeEvaluator()
         self.eval_dims = eval_dims # y,x !!
@@ -236,7 +234,7 @@ class LayeredDecisionForest():
                 depth_image.cu().reshape(dims),
                 i.cu().reshape(dims))
         
-        self.mean_shift.make_composite_labels_image(
+        self.eval.make_composite_labels_image(
             self.labels_images_ptrs_cu.cu(),
             self.eval_dims[1],
             self.eval_dims[0],
@@ -249,6 +247,7 @@ class DecisionTreeEvaluator():
         cu_mod = py_nvcc_utils.get_module('src/cuda/tree_eval.cu')
         self.cu_eval_image = cu_mod.get_function('evaluate_image_using_tree')
         self.cu_eval_image_forest = cu_mod.get_function('evaluate_image_using_forest')
+        self._make_composite_labels_image = cu_mod.get_function('make_composite_labels_image')
     
     def get_labels(self, tree, depth_images_in, labels_out):
         num_images, dim_y, dim_x = depth_images_in.shape
@@ -291,6 +290,23 @@ class DecisionTreeEvaluator():
             forest.forest_cu,
             labels_out,
             grid=grid_dim, block=block_dim, shared=(BLOCK_DIM_X * forest.num_classes * 4)) # sizeof(float), right?
+
+
+    def make_composite_labels_image(self, images, dim_x, dim_y, labels_decision_tree, composite_image):
+
+        # every point..
+        grid_dim = ((dim_x // 32) + 1, (dim_y // 32) + 1, 1)
+        block_dim = (32, 32, 1)
+
+        self._make_composite_labels_image(
+            images,
+            np.int32(images.shape[0]),
+            np.int32(dim_x),
+            np.int32(dim_y),
+            labels_decision_tree,
+            composite_image,
+            grid=grid_dim,
+            block=block_dim)
 
 
 # TODO: modify these thresholds during the training process..

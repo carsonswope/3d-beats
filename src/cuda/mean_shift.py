@@ -11,7 +11,7 @@ import cuda.py_nvcc_utils as py_nvcc_utils
 class MeanShift:
     def __init__(self):
         cu_mod = py_nvcc_utils.get_module('src/cuda/mean_shift.cu')
-        self._make_composite_labels_image = cu_mod.get_function('make_composite_labels_image')
+        # self._make_composite_labels_image = cu_mod.get_function('make_composite_labels_image')
         self._run = cu_mod.get_function('run')
 
         self.means = None
@@ -21,22 +21,6 @@ class MeanShift:
         # self.temp_sums_cpu = None
         # self.denom_sums = None
 
-    def make_composite_labels_image(self, images, dim_x, dim_y, labels_decision_tree, composite_image):
-
-        # every point..
-        grid_dim = ((dim_x // 32) + 1, (dim_y // 32) + 1, 1)
-        block_dim = (32, 32, 1)
-
-        self._make_composite_labels_image(
-            images,
-            np.int32(images.shape[0]),
-            np.int32(dim_x),
-            np.int32(dim_y),
-            labels_decision_tree,
-            composite_image,
-            grid=grid_dim,
-            block=block_dim)
-    
     def run(self, num_rounds, labels, num_labels, variances):
 
         if not self.temp_sums or self.temp_sums.shape != (num_labels, 3):

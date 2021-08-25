@@ -11,13 +11,13 @@ This is still a work in process, but here's a gif of the classifier in action:
 
 # TODOs:
 
-- automatically calibrate each fingertip over time! with each note, see how far down on the table the finger is. continuously update as weighted mean
 - velocity:
   - option to vary midi notes' velocity with velocity of tap
 - ignore fingertips that are not featured prominently / or have high variance from mean shift
 - auto-tuning of plane / z threshold. should be able to determine best z threshold automatically
 - add thumb sections to multi-level RDF architecture.
-- OR simpler 2-stage RDF architecture that simply identifies:
+- OR, eventually, simpler 2-stage RDF architecture that simply identifies:
   - 1. fingertip OR {rest of hand}
   - 2. identify which fingertip
 - cleanup errors in logs on close
+- close on ESC key

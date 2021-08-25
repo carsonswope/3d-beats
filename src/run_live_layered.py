@@ -67,12 +67,12 @@ class RunLive_Layered(AppBase):
         self.layered_rdf = LayeredDecisionForest.load(args.cfg, (self.DIM_Y, self.DIM_X))
         self.points_ops = PointsOps()
 
-        self.pts_gpu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.float32)
+        self.pts = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.float32)
 
-        self.depth_image_gpu = GpuBuffer((1, self.DIM_Y, self.DIM_X), np.uint16)
-        self.labels_image_gpu = GpuBuffer((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
+        self.depth_image = GpuBuffer((1, self.DIM_Y, self.DIM_X), np.uint16)
+        self.labels_image = GpuBuffer((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
-        self.labels_image_rgba_gpu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
+        self.labels_image_rgba = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
         self.labels_image_rgba_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
         self.frame_num = 0
@@ -98,7 +98,7 @@ class RunLive_Layered(AppBase):
 
         # Convert images to numpy arrays
         depth_image = np.asanyarray(depth_frame.get_data()).reshape((1, self.DIM_Y, self.DIM_X))
-        self.depth_image_gpu.cu().set(depth_image)
+        self.depth_image.cu().set(depth_image)
 
         grid_dim = (1, (self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1)
         block_dim = (1,32,32)
@@ -108,13 +108,13 @@ class RunLive_Layered(AppBase):
             np.array([1, self.DIM_X, self.DIM_Y, -1], dtype=np.int32),
             self.PP,
             np.float32(self.FOCAL),
-            self.depth_image_gpu.cu(),
-            self.pts_gpu.cu(),
+            self.depth_image.cu(),
+            self.pts.cu(),
             grid=grid_dim,
             block=block_dim)
 
         if not self.calibrated_plane.is_set():
-            self.calibrated_plane.make(self.pts_gpu, (self.DIM_X, self.DIM_Y))
+            self.calibrated_plane.make(self.pts, (self.DIM_X, self.DIM_Y))
 
         # every point..
         grid_dim2 = (((self.DIM_X * self.DIM_Y) // 1024) + 1, 1, 1)
@@ -122,7 +122,7 @@ class RunLive_Layered(AppBase):
 
         self.points_ops.transform_points(
             np.int32(self.DIM_X * self.DIM_Y),
-            self.pts_gpu.cu(),
+            self.pts.cu(),
             self.calibrated_plane.get_mat(),
             grid=grid_dim2,
             block=block_dim2)
@@ -130,32 +130,32 @@ class RunLive_Layered(AppBase):
         self.calibrated_plane.filter_points_by_plane(
             np.int32(self.DIM_X * self.DIM_Y),
             np.float32(self.PLANE_Z_OUTLIER_THRESHOLD),
-            self.pts_gpu.cu(),
+            self.pts.cu(),
             grid=grid_dim2,
             block=block_dim2)
 
         self.points_ops.setup_depth_image_for_forest(
             np.int32(self.DIM_X * self.DIM_Y),
-            self.pts_gpu.cu(),
-            self.depth_image_gpu.cu(),
+            self.pts.cu(),
+            self.depth_image.cu(),
             grid=grid_dim2,
             block=block_dim2)
 
         # run RDF!
-        self.layered_rdf.run(self.depth_image_gpu, self.labels_image_gpu)
+        self.layered_rdf.run(self.depth_image, self.labels_image)
 
         # make RGBA image
-        self.labels_image_rgba_gpu.cu().fill(0)
+        self.labels_image_rgba.cu().fill(0)
         self.points_ops.make_rgba_from_labels(
             np.uint32(self.DIM_X),
             np.uint32(self.DIM_Y),
             np.uint32(self.layered_rdf.num_layered_classes),
-            self.labels_image_gpu.cu(),
+            self.labels_image.cu(),
             self.layered_rdf.label_colors.cu(),
-            self.labels_image_rgba_gpu.cu(),
+            self.labels_image_rgba.cu(),
             grid = ((self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1, 1),
             block = (32,32,1))
-        self.labels_image_rgba_tex.copy_from_gpu_buffer(self.labels_image_rgba_gpu)
+        self.labels_image_rgba_tex.copy_from_gpu_buffer(self.labels_image_rgba)
 
         self.frame_num += 1
 

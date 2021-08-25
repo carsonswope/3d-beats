@@ -74,10 +74,10 @@ class RunLiveApp(AppBase):
         self.FOCAL = depth_intrin.fx
         self.PP = np.array([depth_intrin.ppx, depth_intrin.ppy], dtype=np.float32)
 
-        self.pts_gpu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.float32)
+        self.pts = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.float32)
 
-        self.depth_image_gpu = GpuBuffer((1, self.DIM_Y, self.DIM_X), np.uint16)
-        self.labels_image_gpu = GpuBuffer((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
+        self.depth_image = GpuBuffer((1, self.DIM_Y, self.DIM_X), np.uint16)
+        self.labels_image = GpuBuffer((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
         self.labels_image_rgba_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
@@ -104,7 +104,7 @@ class RunLiveApp(AppBase):
 
         # Convert images to numpy arrays
         depth_image = np.asanyarray(depth_frame.get_data()).reshape((1, self.DIM_Y, self.DIM_X))
-        self.depth_image_gpu.cu().set(depth_image)
+        self.depth_image.cu().set(depth_image)
 
         grid_dim = (1, (self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1)
         block_dim = (1,32,32)
@@ -114,13 +114,13 @@ class RunLiveApp(AppBase):
             np.array([1, self.DIM_X, self.DIM_Y, -1], dtype=np.int32),
             self.PP,
             np.float32(self.FOCAL),
-            self.depth_image_gpu.cu(),
-            self.pts_gpu.cu(),
+            self.depth_image.cu(),
+            self.pts.cu(),
             grid=grid_dim,
             block=block_dim)
 
         if not self.calibrated_plane.is_set():
-            self.calibrated_plane.make(self.pts_gpu, (self.DIM_X, self.DIM_Y))
+            self.calibrated_plane.make(self.pts, (self.DIM_X, self.DIM_Y))
 
         # every point..
         grid_dim2 = (((self.DIM_X * self.DIM_Y) // 1024) + 1, 1, 1)
@@ -128,7 +128,7 @@ class RunLiveApp(AppBase):
 
         self.points_ops.transform_points(
             np.int32(self.DIM_X * self.DIM_Y),
-            self.pts_gpu.cu(),
+            self.pts.cu(),
             self.calibrated_plane.get_mat(),
             grid=grid_dim2,
             block=block_dim2)
@@ -136,26 +136,26 @@ class RunLiveApp(AppBase):
         self.calibrated_plane.filter_points_by_plane(
             np.int32(self.DIM_X * self.DIM_Y),
             np.float32(self.PLANE_Z_OUTLIER_THRESHOLD),
-            self.pts_gpu.cu(),
+            self.pts.cu(),
             grid=grid_dim2,
             block=block_dim2)
 
         self.points_ops.setup_depth_image_for_forest(
             np.int32(self.DIM_X * self.DIM_Y),
-            self.pts_gpu.cu(),
-            self.depth_image_gpu.cu(),
+            self.pts.cu(),
+            self.depth_image.cu(),
             grid=grid_dim2,
             block=block_dim2)
 
-        self.labels_image_gpu.cu().fill(np.uint16(65535))
-        self.decision_tree_evaluator.get_labels_forest(self.forest, self.depth_image_gpu.cu(), self.labels_image_gpu.cu())
+        self.labels_image.cu().fill(np.uint16(65535))
+        self.decision_tree_evaluator.get_labels_forest(self.forest, self.depth_image.cu(), self.labels_image.cu())
 
         # unmap from cuda.. isn't actually necessary, but just to make sure..
-        self.depth_image_gpu.gl()
+        self.depth_image.gl()
 
         # final steps: these are slow.
         # can be polished if/when necessary
-        labels_image_cpu = self.labels_image_gpu.cu().get()
+        labels_image_cpu = self.labels_image.cu().get()
         labels_image_cpu_rgba = self.data_config.convert_ids_to_colors(labels_image_cpu).reshape((480, 848, 4))
 
         self.labels_image_rgba_tex.set(labels_image_cpu_rgba)
