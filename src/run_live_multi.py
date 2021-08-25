@@ -20,6 +20,8 @@ from engine.profile_timer import ProfileTimer
 
 from util import make_grid, MAX_UINT16
 
+from cpp_grouping import CppGrouping
+
 from hand_state import HandState
 
 import argparse
@@ -114,6 +116,9 @@ class RunLiveMultiApp(AppBase):
 
         self.labels_image_rgba_cpu = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
         self.labels_image_rgba_cu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
+
+        self.coordinate_groups_cpu = np.zeros((self.depth_mm3_dims[0] * self.depth_mm3_dims[1], 3), dtype=np.int32)
+        self.coordinate_groups_gpu = GpuBuffer((self.depth_mm3_dims[0] * self.depth_mm3_dims[1], 3), dtype=np.int32)
 
         self.mean_shift = MeanShift()
 
@@ -234,26 +239,27 @@ class RunLiveMultiApp(AppBase):
             grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
             block=(32, 32, 1))
 
+        self.cu_ctx.synchronize()
 
-        self.t.record('synchronize.., copy to CPU')
+        self.t.record('copy to CPU')
 
         depth_image_mm3 = self.depth_image_cu_mm3.cu().get()
 
         self.t.record('make pixel groups')
 
-        right_group, left_group = self.points_ops.get_pixel_groups_cpu(depth_image_mm3)
+        g_info = np.zeros((2, 3), dtype=np.float32)
+        CppGrouping().make_groups(depth_image_mm3, self.coordinate_groups_cpu, g_info, 0.05)
+        r_group_size = np.int32(g_info[0, 0])
+
+        l_group_size = np.int32(g_info[1, 0])
+        group = self.coordinate_groups_cpu[0:r_group_size + l_group_size]
 
         self.t.record('copy pixel groups to image')
 
         pixel_groups_img = np.zeros(self.depth_image_cu_mm3.shape, dtype=np.uint16)
 
-        if right_group is not None:
-            for py, px in right_group:
-                pixel_groups_img[py, px] = 1
-
-        if left_group is not None:
-            for py, px in left_group:
-                pixel_groups_img[py, px] = 2
+        for py, px, g_id in group:
+            pixel_groups_img[py, px] = g_id
 
         self.depth_image_cu_mm3_groups.cu().set(pixel_groups_img)
 
@@ -318,7 +324,7 @@ class RunLiveMultiApp(AppBase):
 
         # _, self.gauss_sigma = imgui.slider_float('depth sgma', self.gauss_sigma, 0., 10.)
 
-        # imgui.image(self.depth_image_cu_mm3_rbga_tex.gl(), self.DIM_X / 2., self.DIM_Y / 2.)
+        imgui.image(self.depth_image_cu_mm3_rbga_tex.gl(), self.DIM_X / 2., self.DIM_Y / 2.)
         # imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X, self.DIM_Y)
 
         imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 1.2, self.DIM_Y * 1.2)
