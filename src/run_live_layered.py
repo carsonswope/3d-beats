@@ -13,34 +13,23 @@ from engine.texture import GpuTexture
 from engine.window import AppBase
 from engine.buffer import GpuBuffer
 
-class RunLiveApp(AppBase):
+class RunLive_Layered(AppBase):
     def __init__(self):
-        super().__init__(title="RDF Demo")
+        super().__init__(title="Layered RDF Demo")
 
         parser = argparse.ArgumentParser(description='Train a classifier RDF for depth images')
-        parser.add_argument('-m', '--model', nargs='?', required=True, type=str, help='Path to .npy model input file')
-        parser.add_argument('-d', '--data', nargs='?', required=True, type=str, help='Directory holding data')
+        parser.add_argument('-cfg', nargs='?', required=True, type=str, help='Path to the layered decision forest config file')
         parser.add_argument('--rs_bag', nargs='?', required=False, type=str, help='Path to optional input realsense .bag file to use instead of live camera stream')
         parser.add_argument('--plane_num_iterations', nargs='?', required=False, type=int, help='Num random planes to propose looking for best fit')
-        parser.add_argument('--plane_z_threshold', nargs='?', required=True, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
+        parser.add_argument('--plane_z_threshold', nargs='?', required=False, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
         args = parser.parse_args()
 
-        MODEL_PATH = args.model
-        DATASET_PATH = args.data
         RS_BAG = args.rs_bag
 
         NUM_RANDOM_GUESSES = args.plane_num_iterations or 25000
-        self.PLANE_Z_OUTLIER_THRESHOLD = args.plane_z_threshold
+        self.PLANE_Z_OUTLIER_THRESHOLD = args.plane_z_threshold or 40.
 
         self.calibrated_plane = CalibratedPlane(NUM_RANDOM_GUESSES, self.PLANE_Z_OUTLIER_THRESHOLD)
-
-        print('loading forest')
-        self.forest = DecisionForest.load(MODEL_PATH)
-        self.data_config = DecisionTreeDatasetConfig(DATASET_PATH)
-
-        print('compiling CUDA kernels..')
-        self.decision_tree_evaluator = DecisionTreeEvaluator()
-        self.points_ops = PointsOps()
 
         print('initializing camera..')
         # Configure depth and color streams
@@ -74,11 +63,16 @@ class RunLiveApp(AppBase):
         self.FOCAL = depth_intrin.fx
         self.PP = np.array([depth_intrin.ppx, depth_intrin.ppy], dtype=np.float32)
 
+        print('initializing')
+        self.layered_rdf = LayeredDecisionForest.load(args.cfg, (self.DIM_Y, self.DIM_X))
+        self.points_ops = PointsOps()
+
         self.pts_gpu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.float32)
 
         self.depth_image_gpu = GpuBuffer((1, self.DIM_Y, self.DIM_X), np.uint16)
         self.labels_image_gpu = GpuBuffer((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
+        self.labels_image_rgba_gpu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
         self.labels_image_rgba_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
         self.frame_num = 0
@@ -147,24 +141,26 @@ class RunLiveApp(AppBase):
             grid=grid_dim2,
             block=block_dim2)
 
-        self.labels_image_gpu.cu().fill(np.uint16(65535))
-        self.decision_tree_evaluator.get_labels_forest(self.forest, self.depth_image_gpu.cu(), self.labels_image_gpu.cu())
+        # run RDF!
+        self.layered_rdf.run(self.depth_image_gpu, self.labels_image_gpu)
 
-        # unmap from cuda.. isn't actually necessary, but just to make sure..
-        self.depth_image_gpu.gl()
-
-        # final steps: these are slow.
-        # can be polished if/when necessary
-        labels_image_cpu = self.labels_image_gpu.cu().get()
-        labels_image_cpu_rgba = self.data_config.convert_ids_to_colors(labels_image_cpu).reshape((480, 848, 4))
-
-        self.labels_image_rgba_tex.set(labels_image_cpu_rgba)
+        # make RGBA image
+        self.labels_image_rgba_gpu.cu().fill(0)
+        self.points_ops.make_rgba_from_labels(
+            np.uint32(self.DIM_X),
+            np.uint32(self.DIM_Y),
+            np.uint32(self.layered_rdf.num_layered_classes),
+            self.labels_image_gpu.cu(),
+            self.layered_rdf.label_colors.cu(),
+            self.labels_image_rgba_gpu.cu(),
+            grid = ((self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1, 1),
+            block = (32,32,1))
+        self.labels_image_rgba_tex.copy_from_gpu_buffer(self.labels_image_rgba_gpu)
 
         self.frame_num += 1
 
-        imgui.text("f: " + str(self.frame_num))
         imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 2, self.DIM_Y * 2)
 
 if __name__ == '__main__':
-    a = RunLiveApp()
+    a = RunLive_Layered()
     a.run()

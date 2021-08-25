@@ -222,6 +222,8 @@ class LayeredDecisionForest():
 
         # TODO: assert depth image dims!
 
+        labels_image.cu().fill(MAX_UINT16)
+
         for i in self.label_images:
             i.cu().fill(MAX_UINT16)
 

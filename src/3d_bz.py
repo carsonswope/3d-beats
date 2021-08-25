@@ -30,9 +30,9 @@ import imgui
 
 import rtmidi
 
-class RunLiveMultiApp(AppBase):
+class App_3d_bz(AppBase):
     def __init__(self):
-        super().__init__(title="Test-icles", width=1920, height=1500)
+        super().__init__(title="3D-beats", width=1920, height=1500)
 
         self.t = ProfileTimer()
 
@@ -43,7 +43,7 @@ class RunLiveMultiApp(AppBase):
         # parser.add_argument('--plane_z_threshold', nargs='?', required=True, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
         args = parser.parse_args()
 
-
+        # TODO: correctly find midi out port!
         self.midi_out = rtmidi.MidiOut()
         # available_ports = self.midi_out.get_ports()
         self.midi_out.open_port(1) # loopbe port..
@@ -434,8 +434,6 @@ class RunLiveMultiApp(AppBase):
         self.depth_image_rgba_gpu_tex.copy_from_gpu_buffer(self.depth_image_rgba_gpu)
         """
 
-        self.labels_image_composite_cu.cu().fill(MAX_UINT16)
-
         # self.cu_ctx.synchronize()
         # self.t.record('--evals')
 
@@ -522,5 +520,5 @@ class RunLiveMultiApp(AppBase):
 
 
 if __name__ == '__main__':
-    a = RunLiveMultiApp()
+    a = App_3d_bz()
     a.run()
