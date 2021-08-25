@@ -243,12 +243,13 @@ class LayeredDecisionForest():
             m, filter_model, filter_model_class = self.m[i]
             single_labels_image = self.label_images[i]
 
-        # for m, i in zip(self.m, self.label_images):
             self.eval.get_labels_forest(
                 m,
                 depth_image.cu().reshape(dims),
-                single_labels_image.cu().reshape(dims))
-        
+                single_labels_image.cu().reshape(dims),
+                filter_images=self.label_images[filter_model].cu().reshape(dims) if (filter_model is not None) else None,
+                filter_images_class=filter_model_class)
+
         self.eval.make_composite_labels_image(
             self.labels_images_ptrs_cu.cu(),
             self.eval_dims[1],
@@ -264,6 +265,9 @@ class DecisionTreeEvaluator():
         self.cu_eval_image_forest = cu_mod.get_function('evaluate_image_using_forest')
         self._make_composite_labels_image = cu_mod.get_function('make_composite_labels_image')
     
+        # real cu ptr, but should be treated as nullptr
+        self.cu_empty_ptr = GpuBuffer((1,), dtype=np.int)
+
     def get_labels(self, tree, depth_images_in, labels_out):
         num_images, dim_y, dim_x = depth_images_in.shape
 
@@ -284,14 +288,21 @@ class DecisionTreeEvaluator():
             grid=grid_dim, block=block_dim)
 
         
-    def get_labels_forest(self, forest, depth_images_in, labels_out):
+    # TODO: support filter image for single tree forest! or not??
+    def get_labels_forest(self, forest, depth_images_in, labels_out, filter_images=None, filter_images_class=None):
         num_images, dim_y, dim_x = depth_images_in.shape
+
+        if filter_images is not None:
+            assert filter_images_class is not None
+            assert filter_images.shape == depth_images_in.shape
 
         num_test_pixels = num_images * dim_y * dim_x
 
         BLOCK_DIM_X = int(MAX_THREADS_PER_BLOCK // forest.num_trees) 
         grid_dim = (int(num_test_pixels // BLOCK_DIM_X) + 1, 1, 1)
         block_dim = (BLOCK_DIM_X, forest.num_trees, 1)
+
+        f_img = filter_images if filter_images else self.cu_empty_ptr.cu()
 
         self.cu_eval_image_forest(
             np.int32(forest.num_trees),
@@ -302,6 +313,8 @@ class DecisionTreeEvaluator():
             np.int32(forest.max_depth),
             np.int32(BLOCK_DIM_X),
             depth_images_in,
+            np.int32(filter_images_class if filter_images else -1),
+            f_img,
             forest.forest_cu,
             labels_out,
             grid=grid_dim, block=block_dim, shared=(BLOCK_DIM_X * forest.num_classes * 4)) # sizeof(float), right?

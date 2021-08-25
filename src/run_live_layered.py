@@ -151,6 +151,7 @@ class RunLive_Layered(AppBase):
             np.uint32(self.DIM_Y),
             np.uint32(self.layered_rdf.num_layered_classes),
             self.labels_image.cu(),
+            # self.layered_rdf.label_images[1].cu(),
             self.layered_rdf.label_colors.cu(),
             self.labels_image_rgba.cu(),
             grid = ((self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1, 1),

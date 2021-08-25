@@ -31,6 +31,8 @@ extern "C" {__global__
         int MAX_TREE_DEPTH,
         int BLOCK_DIM_X,
         uint16* _img_in,
+        int filter_class,
+        uint16* _filter,
         float* _forest,
         uint16* _labels_out)
 {
@@ -69,6 +71,13 @@ extern "C" {__global__
 
     float* tree = _forest + (k * (TOTAL_TREE_NODES * TREE_NODE_ELS));
     BinaryTree<float> decision_tree_w(tree, TREE_NODE_ELS, MAX_TREE_DEPTH);
+
+    // Don't try to evaluate if filtering by a filter image!
+    if (filter_class != -1) {
+        Array3d<uint16> filter(_filter, {NUM_IMAGES,IMG_DIM_Y,IMG_DIM_X}, MAX_UINT16);
+        const uint16 img_label = filter.get({img_idx, img_y, img_x});
+        if ((int)img_label != filter_class) { return; }
+    }
 
     // Don't try to evaluate if img in has 0 value!
     const uint16 img_d = img_in.get({img_idx, img_y, img_x});
