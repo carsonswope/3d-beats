@@ -136,12 +136,12 @@ class RunLiveMultiApp(AppBase):
         self.hand_states = [
             HandState(
                 # defaults! (z_thresh, midi_note)
-                [(148., 36), (148., 37), (148., 38), (135., 39)],
+                [(140., 36), (140., 37), (140., 38), (130., 39)],
                 on_fn,
                 off_fn),
             HandState(
                 # defaults! (z_thresh, midi_note)
-                [(148., 40), (148., 41), (148., 42), (135., 43)],
+                [(140., 40), (140., 41), (140., 42), (130., 43)],
                 on_fn,
                 off_fn)]
 
@@ -150,6 +150,12 @@ class RunLiveMultiApp(AppBase):
         self.frame_num = 0
 
         self.gauss_sigma = 2.5
+
+        self.calibrate_fingers_time = None
+
+        self.z_thresh_offset = 25.
+
+        self.min_velocity = 15.
 
     def splash(self):
         imgui.text('loading...')
@@ -301,16 +307,13 @@ class RunLiveMultiApp(AppBase):
 
         """
 
-
         # generate RGB image for debugging!
         self.labels_image_rgba_cu.cu().fill(np.uint8(0))
 
         self.t.record('per-hand pipeline 1')
-
         self.run_per_hand_pipeline(1, False)
 
         self.t.record('per-hand pipeline 2')
-
         self.run_per_hand_pipeline(2, True)
 
         self.t.record('imgui')
@@ -319,16 +322,39 @@ class RunLiveMultiApp(AppBase):
         
         imgui.text('running!')
 
+        # per finger calibration
+        if self.calibrate_fingers_time is not None:
+            time_diff = self.calibrate_fingers_time - time.perf_counter()
+            imgui.text(f'calibrating fingers in {"%1.1f" % (time_diff + 1)}..')
+            NUM_PAST_POSITIONS_TO_CALIBRATE_FINGERS = 10
+            if time_diff <= 0:
+                for h in self.hand_states:
+                    for f in h.fingertips:
+                        if len(f.positions) > NUM_PAST_POSITIONS_TO_CALIBRATE_FINGERS:
+                            p = f.positions[-NUM_PAST_POSITIONS_TO_CALIBRATE_FINGERS:]
+                            new_thresh = np.sum(p) / len(p)
+                            f.z_thresh = new_thresh + 20.
+                        else:
+                            print('failed to calibrate finger! not enough position history')
+                self.calibrate_fingers_time = None
+        else:
+            if imgui.button('calibrate fingers (in 5 seconds)'):
+                self.calibrate_fingers_time = time.perf_counter() + 5.
+
         self.calibrate_next_frame = imgui.button('recalibrate')
 
         _, self.PLANE_Z_OUTLIER_THRESHOLD = imgui.slider_float('plane threshold', self.PLANE_Z_OUTLIER_THRESHOLD, 0., 100.)
 
+        _, self.z_thresh_offset = imgui.slider_float('fingertip z threshold offset', self.z_thresh_offset, 0., 100.)
+
+        _, self.min_velocity = imgui.slider_float('min velocity', self.min_velocity, 0., 100.)
+
         if imgui.tree_node('R'):
-            self.hand_states[0].draw_imgui()
+            self.hand_states[0].draw_imgui(self.z_thresh_offset)
             imgui.tree_pop()
 
         if imgui.tree_node('L'):
-            self.hand_states[1].draw_imgui()
+            self.hand_states[1].draw_imgui(self.z_thresh_offset)
             imgui.tree_pop()
 
         imgui.text('-')
@@ -492,7 +518,7 @@ class RunLiveMultiApp(AppBase):
                 pt.append(1.)
                 pt = self.calibrated_plane.plane @ pt
                 pt_z = -pt[2]
-                hand_state.fingertips[i].next_z_pos(pt_z)
+                hand_state.fingertips[i].next_z_pos(pt_z, self.z_thresh_offset, self.min_velocity)
 
 
 if __name__ == '__main__':

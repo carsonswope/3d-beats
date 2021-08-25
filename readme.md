@@ -11,8 +11,8 @@ This is still a work in process, but here's a gif of the classifier in action:
 
 # TODOs:
 
+- automatically calibrate each fingertip over time! with each note, see how far down on the table the finger is. continuously update as weighted mean
 - velocity:
-  - ignore taps below a certain velocity
   - option to vary midi notes' velocity with velocity of tap
 - ignore fingertips that are not featured prominently / or have high variance from mean shift
 - auto-tuning of plane / z threshold. should be able to determine best z threshold automatically

@@ -19,7 +19,7 @@ class FingertipState:
         self.set_midi_state(False)
         pass
 
-    def next_z_pos(self, z_pos):
+    def next_z_pos(self, z_pos, z_thresh_offset, min_velocity):
 
         self.positions.append(z_pos)
         while len(self.positions) > self.num_positions:
@@ -27,7 +27,8 @@ class FingertipState:
             
         if len(self.positions) > 10: # arbitrary..
             last_pos = self.positions[-1]
-            if last_pos < self.z_thresh:
+            # must be located below 'on surface' threshold, and have downward velocity above threshold to be a note
+            if last_pos < (self.z_thresh + z_thresh_offset) and np.all(-np.diff(self.positions)[-2:] > min_velocity):
                 self.set_midi_state(True)
             else:
                 self.set_midi_state(False)
@@ -51,13 +52,13 @@ class HandState:
             z_thresh,
             midi_note) for z_thresh, midi_note in defaults]
     
-    def draw_imgui(self):
+    def draw_imgui(self, z_thresh_offset):
 
         imgui.begin_group()
 
         c_x, c_y = imgui.get_cursor_pos()
         graph_dim_x = 300.
-        slider_dim_x = 35.
+        slider_dim_x = 50.
 
         graph_pad = 15.
         dim_y = 150.
@@ -83,7 +84,7 @@ class HandState:
                 scale_min=0.,
                 graph_size=(graph_dim_x, dim_y))
 
-            f_threshold = self.fingertips[i].z_thresh
+            f_threshold = (self.fingertips[i].z_thresh + z_thresh_offset)
 
             if self.fingertips[i].note_on:
                 thresh_color = imgui.get_color_u32_rgba(0.3,1,0.8,0.30)
