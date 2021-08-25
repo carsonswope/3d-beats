@@ -14,7 +14,7 @@ from calibrated_plane import *
 from cuda.mean_shift import *
 
 from engine.texture import GpuTexture
-from engine.window import AppBase
+from engine.window import AppBase, run_app
 from engine.buffer import GpuBuffer
 from engine.profile_timer import ProfileTimer
 
@@ -498,7 +498,5 @@ class App_3d_bz(AppBase):
                 pt_z = -pt[2]
                 hand_state.fingertips[i].next_z_pos(pt_z, self.z_thresh_offset, self.min_velocity)
 
-
 if __name__ == '__main__':
-    a = App_3d_bz()
-    a.run()
+    run_app(App_3d_bz)

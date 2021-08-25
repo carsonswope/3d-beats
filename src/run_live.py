@@ -1,4 +1,5 @@
 from OpenGL.GL import * 
+import glfw
 import pyrealsense2 as rs
 import numpy as np
 import cv2
@@ -10,7 +11,7 @@ from cuda.points_ops import *
 from calibrated_plane import *
 from engine.texture import GpuTexture
 
-from engine.window import AppBase
+from engine.window import AppBase, run_app
 from engine.buffer import GpuBuffer
 
 class RunLiveApp(AppBase):
@@ -166,5 +167,4 @@ class RunLiveApp(AppBase):
         imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 2, self.DIM_Y * 2)
 
 if __name__ == '__main__':
-    a = RunLiveApp()
-    a.run()
+    run_app(RunLiveApp)

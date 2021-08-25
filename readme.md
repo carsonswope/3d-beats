@@ -19,5 +19,4 @@ This is still a work in process, but here's a gif of the classifier in action:
 - OR, eventually, simpler 2-stage RDF architecture that simply identifies:
   - 1. fingertip OR {rest of hand}
   - 2. identify which fingertip
-- cleanup errors in logs on close
 - close on ESC key

@@ -60,8 +60,26 @@ class AppBase():
 
         glfw.swap_buffers(self.window)
 
+        glfw.set_key_callback(self.window, self.key_event)
+
         self.ms_per_frame_log_max = 100
         self.ms_per_frame_log = [0]
+
+        self.key_event_fns = []
+
+        def esc_close(action):
+            if action == glfw.PRESS:
+                glfw.set_window_should_close(self.window, True)
+        self.register_key_event(glfw.KEY_ESCAPE, esc_close)
+
+    def register_key_event(self, key, fn):
+        self.key_event_fns.append((key, fn))
+
+    def key_event(self, _window, key, _scancode, action, _mods):
+        if not self.imgui_io.want_capture_keyboard:
+            for k, fn in self.key_event_fns:
+                if k == key:
+                    fn(action)
 
     # def key_event(self, key, action, modifiers):
     #     self.imgui.key_event(key, action, modifiers)
@@ -80,6 +98,9 @@ class AppBase():
 
     # def mouse_release_event(self, x: int, y: int, button: int):
     #     self.imgui.mouse_release_event(x, y, button)
+    # def __del
+    # def __del__(self):
+        # glfw.terminate()
 
     def run(self):
 
@@ -89,6 +110,7 @@ class AppBase():
             t = time.perf_counter() - start_time
 
             glfw.poll_events()
+
 
             glClearColor(0, 0, 0, 1)
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -116,4 +138,8 @@ class AppBase():
 
         pycuda.autoinit.context.pop()
 
-        glfw.terminate()
+def run_app(A):
+    a = A()
+    a.run()
+    del a
+    glfw.terminate()
