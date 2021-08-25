@@ -100,7 +100,7 @@ class RunLiveMultiApp(AppBase):
         self.depth_image_cu_2 = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.depth_image_group_cu = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
-        self.depth_mm_level = 4
+        self.depth_mm_level = 3
         self.depth_mm3_dims = (self.DIM_Y // (1<<self.depth_mm_level), self.DIM_X // (1<<self.depth_mm_level))
         self.depth_image_cu_mm3 = GpuBuffer(self.depth_mm3_dims, dtype=np.uint16)
         self.depth_image_cu_mm3_groups = GpuBuffer(self.depth_mm3_dims, dtype=np.uint16)
@@ -156,10 +156,14 @@ class RunLiveMultiApp(AppBase):
     
     def tick(self, _):
 
-        self.t.record('initial processing')
 
         # Wait for a coherent pair of frames: depth and color
         frames = self.pipeline.wait_for_frames()
+
+        # start frame timer after we get the depth frame.
+        # we really only care about how long it takes to process it
+        self.t.record('initial processing')
+
         depth_frame = frames.get_depth_frame()
 
         if not depth_frame:
@@ -250,35 +254,41 @@ class RunLiveMultiApp(AppBase):
         g_info = np.zeros((2, 3), dtype=np.float32)
         CppGrouping().make_groups(depth_image_mm3, self.coordinate_groups_cpu, g_info, 0.05)
         r_group_size = np.int32(g_info[0, 0])
-
         l_group_size = np.int32(g_info[1, 0])
-        group = self.coordinate_groups_cpu[0:r_group_size + l_group_size]
+        groups_size = r_group_size + l_group_size
 
         self.t.record('copy pixel groups to image')
 
-        pixel_groups_img = np.zeros(self.depth_image_cu_mm3.shape, dtype=np.uint16)
+        self.depth_image_cu_mm3_groups_2.cu().fill(0)
 
-        for py, px, g_id in group:
-            pixel_groups_img[py, px] = g_id
+        if groups_size > 0:
+            self.coordinate_groups_gpu.cu()[0:groups_size,:].set(self.coordinate_groups_cpu[0:groups_size])
 
-        self.depth_image_cu_mm3_groups.cu().set(pixel_groups_img)
+            self.points_ops.write_pixel_groups_to_stencil_image(
+                self.coordinate_groups_gpu.cu(),
+                np.int32(groups_size),
+                self.depth_image_cu_mm3_groups_2.cu(),
+                np.array(self.depth_mm3_dims, dtype=np.int32),
+                grid=make_grid((int(groups_size), 1, 1), (32, 1, 1)),
+                block=(32, 1, 1))
 
-        # grow twice!
-        # 1 to 2
-        self.points_ops.grow_groups(
-            np.array([self.depth_mm3_dims[1], self.depth_mm3_dims[0]], dtype=np.int32),
-            self.depth_image_cu_mm3_groups.cu(),
-            self.depth_image_cu_mm3_groups_2.cu(),
-            grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
-            block=(32, 32, 1))
-        # 2 to 1
-        self.points_ops.grow_groups(
-            np.array([self.depth_mm3_dims[1], self.depth_mm3_dims[0]], dtype=np.int32),
-            self.depth_image_cu_mm3_groups_2.cu(),
-            self.depth_image_cu_mm3_groups.cu(),
-            grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
-            block=(32, 32, 1))
 
+            self.points_ops.grow_groups(
+                np.array([self.depth_mm3_dims[1], self.depth_mm3_dims[0]], dtype=np.int32),
+                self.depth_image_cu_mm3_groups_2.cu(),
+                self.depth_image_cu_mm3_groups.cu(),
+                grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
+                block=(32, 32, 1))
+
+            # grow twice?
+            # self.points_ops.grow_groups(
+            #     np.array([self.depth_mm3_dims[1], self.depth_mm3_dims[0]], dtype=np.int32),
+            #     self.depth_image_cu_mm3_groups_2.cu(),
+            #     self.depth_image_cu_mm3_groups.cu(),
+            #     grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
+            #     block=(32, 32, 1))
+
+        """
         self.points_ops.make_depth_rgba(
             np.array([self.depth_mm3_dims[1], self.depth_mm3_dims[0]], dtype=np.int32),
             np.uint16(0),
@@ -287,8 +297,10 @@ class RunLiveMultiApp(AppBase):
             self.depth_image_cu_mm3_rbga.cu(),
             grid=make_grid((self.depth_mm3_dims[1], self.depth_mm3_dims[0], 1), (32, 32, 1)),
             block=(32, 32, 1))
-
         self.depth_image_cu_mm3_rbga_tex.copy_from_gpu_buffer(self.depth_image_cu_mm3_rbga)
+
+        """
+
 
         # generate RGB image for debugging!
         self.labels_image_rgba_cu.cu().fill(np.uint8(0))
@@ -324,7 +336,7 @@ class RunLiveMultiApp(AppBase):
 
         # _, self.gauss_sigma = imgui.slider_float('depth sgma', self.gauss_sigma, 0., 10.)
 
-        imgui.image(self.depth_image_cu_mm3_rbga_tex.gl(), self.DIM_X / 2., self.DIM_Y / 2.)
+        # imgui.image(self.depth_image_cu_mm3_rbga_tex.gl(), self.DIM_X / 2., self.DIM_Y / 2.)
         # imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X, self.DIM_Y)
 
         imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 1.2, self.DIM_Y * 1.2)
@@ -384,6 +396,7 @@ class RunLiveMultiApp(AppBase):
             grid=make_grid((self.DIM_X * self.DIM_Y, 1, 1), (1024, 1, 1)),
             block=(1024, 1, 1))
 
+        """
         self.points_ops.make_depth_rgba(
             np.array((self.DIM_X, self.DIM_Y), dtype=np.int32),
             np.uint16(2000),
@@ -393,6 +406,7 @@ class RunLiveMultiApp(AppBase):
             grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
             block=(32, 32, 1))
         self.depth_image_rgba_gpu_tex.copy_from_gpu_buffer(self.depth_image_rgba_gpu)
+        """
 
         self.labels_image_composite_cu.cu().fill(MAX_UINT16)
 
@@ -432,6 +446,8 @@ class RunLiveMultiApp(AppBase):
         # self.cu_ctx.synchronize()
         # self.t.record('--rgba')
 
+        """
+
         self.cu_ctx.synchronize()
         self.t.record('--more rgba')
 
@@ -452,6 +468,7 @@ class RunLiveMultiApp(AppBase):
 
         self.labels_image_rgba_cu.cu().set(self.labels_image_rgba_cpu)
         
+        """
         # self.cu_ctx.synchronize()
         # self.t.record('--pts analysis')
 

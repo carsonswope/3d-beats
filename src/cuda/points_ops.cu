@@ -482,3 +482,23 @@ void flip_x(
     out.set({y, out_x}, in.get({y, in_x}));
 }}
     
+
+extern "C" {__global__
+void write_pixel_groups_to_stencil_image(
+        int* _coords,
+        int num_coords,
+        uint16* _stencil,
+        int2 stencil_dims) {
+
+    const int i = (blockIdx.x * blockDim.x) + threadIdx.x;
+    if (i >= num_coords) return;
+
+    auto coords = Array2d<int>(_coords, {num_coords, 3}); // actual dims are larger - max_coords,3 rather than num_coords,3
+    auto stencil = Array2d<uint16>(_stencil, stencil_dims);
+
+    const int c_x = coords.get({i, 0});
+    const int c_y = coords.get({i, 1});
+    const int g_id = coords.get({i, 2});
+
+    stencil.set({c_x, c_y}, (uint16_t)g_id);
+}}

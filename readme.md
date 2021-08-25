@@ -11,7 +11,6 @@ This is still a work in process, but here's a gif of the classifier in action:
 
 # TODOs:
 
-- write group finding extension in c++. this code shouldn't be slow, but it is in python
 - velocity:
   - ignore taps below a certain velocity
   - option to vary midi notes' velocity with velocity of tap

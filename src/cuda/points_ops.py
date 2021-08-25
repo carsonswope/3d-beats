@@ -27,6 +27,7 @@ class PointsOps():
 
         self.stencil_depth_image_by_group = cu_mod.get_function('stencil_depth_image_by_group')
 
+        self.write_pixel_groups_to_stencil_image = cu_mod.get_function('write_pixel_groups_to_stencil_image')
         self.shrink_image = cu_mod.get_function('shrink_image')
         self.grow_groups = cu_mod.get_function('grow_groups')
         self.flip_x = cu_mod.get_function('flip_x')

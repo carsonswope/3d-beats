@@ -1,5 +1,3 @@
-$ErrorActionPreference = "Stop"
-
 # mkdir build
 rm cpp_grouping.cpp
 rm *.pyd
