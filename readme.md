@@ -50,7 +50,7 @@ And copy everything in the `deps` directory to that directory:
 
 `cp .\deps\* C:\Users\Carson\miniconda3\envs\env_3d_beats\Lib\site-packages\.`
 
-Unfortunately, `pycuda` must be built from source to get opengl interop. This part can be run from anywhere, doesn't have to be in the repo directory
+Unfortunately, `pycuda` must be built from source to get opengl interop. This part can be run from anywhere, doesn't have to be in the repo directory. But make sure you still are running these commands from inside the correct conda python environment.
 
 ```
 git clone git clone https://github.com/inducer/pycuda.git
