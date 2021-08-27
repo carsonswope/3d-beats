@@ -6,6 +6,8 @@ At the core, this is an implementation of depth image pixel classification via r
 
 Labeled training data is obtained by using skin paint to color various sections of the subject (hand) and recording both depth and color video streams. Additionally, forests can be stacked on top of one another, for segmenting the classification task into sub-tasks.
 
+To generate fingertip positions, the mean shift algorithm is used to find the center of each classification region. The original depth image is then sampled at the determined pixel, to find the height of each fingertip above the plane. 
+
 ## Instructions for installation / development.
 
 Unfortunately, it's not very well packaged for easy distribution at the moment. To start, you will need:
@@ -57,6 +59,12 @@ git submodule update --init
 python ./configure.py --cuda-enable-gl
 python setup.py build
 python setup.py install
+```
+
+Some cuda kernels rely on GLM (library for OpenGL mathematics). The repo needs to be downloaded, but no further build is necessary.
+```
+cd src/cuda/deps
+git clone https://github.com/g-truc/glm.git
 ```
 
 Last but not least, I would recommend downloading the latest [RealSense viewer release](https://github.com/IntelRealSense/librealsense/releases) and use it to upgrade the firmware to the latest D415 fw. Or skip this step but, you know, in case of debugging.
