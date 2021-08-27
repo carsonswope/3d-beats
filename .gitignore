@@ -9,6 +9,7 @@ datagen/gen_4class
 datagen/genstereo-filterable
 datagen/sets
 models_out
+model
 
 src/cuda/deps/glm
 imgui.ini

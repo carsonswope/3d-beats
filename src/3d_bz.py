@@ -2,9 +2,9 @@ from OpenGL.GL import *
 
 import pyrealsense2 as rs
 import numpy as np
-import cv2
-import math
-import time
+# import cv2
+# import math
+# import time
 
 import pycuda.driver as cu
 
@@ -319,7 +319,7 @@ class App_3d_bz(AppBase):
                 for f, t in zip(h.fingertips, self.DEFAULT_FINGERTIP_THRESHOLDS):
                     f.z_thresh = t
 
-        self.calibrate_next_frame = imgui.button('recalibrate')
+        self.calibrate_next_frame = imgui.button('recalibrate plane')
 
         _, self.PLANE_Z_OUTLIER_THRESHOLD = imgui.slider_float('plane threshold', self.PLANE_Z_OUTLIER_THRESHOLD, 0., 100.)
 
@@ -335,9 +335,9 @@ class App_3d_bz(AppBase):
             self.hand_states[1].draw_imgui(self.z_thresh_offset)
             imgui.tree_pop()
 
-        imgui.text('-')
+        imgui.text(':)')
 
-        imgui.image(self.depth_image_mm_rgba_tex.gl(), self.DIM_X / 2., self.DIM_Y / 2.)
+        # imgui.image(self.depth_image_mm_rgba_tex.gl(), self.DIM_X / 2., self.DIM_Y / 2.)
         # imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X, self.DIM_Y)
 
         imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 1.2, self.DIM_Y * 1.2)
