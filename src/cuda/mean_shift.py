@@ -10,16 +10,11 @@ import cuda.py_nvcc_utils as py_nvcc_utils
 
 class MeanShift:
     def __init__(self):
-        cu_mod = py_nvcc_utils.get_module('src/cuda/mean_shift.cu')
-        # self._make_composite_labels_image = cu_mod.get_function('make_composite_labels_image')
+        cu_mod = py_nvcc_utils.get_module('mean_shift')
         self._run = cu_mod.get_function('run')
 
         self.means = None
-        # self.means_cpu = None
-
         self.temp_sums = None
-        # self.temp_sums_cpu = None
-        # self.denom_sums = None
 
     def run(self, num_rounds, labels, num_labels, variances):
 

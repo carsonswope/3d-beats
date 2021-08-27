@@ -14,7 +14,7 @@ def gaussian_kernel(k_size, sigma):
 
 class PointsOps():
     def __init__(self):
-        cu_mod = py_nvcc_utils.get_module('src/cuda/points_ops.cu')
+        cu_mod = py_nvcc_utils.get_module('points_ops')
         self.deproject_points = cu_mod.get_function('deproject_points')
         self.depths_from_points = cu_mod.get_function('depths_from_points')
         self.transform_points = cu_mod.get_function('transform_points')

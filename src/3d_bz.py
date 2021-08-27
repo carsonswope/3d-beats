@@ -41,7 +41,7 @@ class App_3d_bz(AppBase):
         parser.add_argument('--rs_bag', nargs='?', required=False, type=str, help='Path to optional input realsense .bag file to use instead of live camera stream')
         parser.add_argument('--plane_num_iterations', nargs='?', required=False, type=int, help='Num random planes to propose looking for best fit')
         # parser.add_argument('--plane_z_threshold', nargs='?', required=True, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
-        args = parser.parse_args()
+        args = parser.parse_known_args()[0]
 
         # TODO: correctly find midi out port!
         self.midi_out = rtmidi.MidiOut()

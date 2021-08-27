@@ -7,7 +7,7 @@ from engine.buffer import GpuBuffer
 
 class FitMesh:
     def __init__(self):
-        cu_mod = py_nvcc_utils.get_module('src/cuda/fit_mesh.cu')
+        cu_mod = py_nvcc_utils.get_module('fit_mesh')
         self._calc_image_cost = cu_mod.get_function('calc_image_cost')
 
         self._cost = GpuBuffer((1,), dtype=np.float32)

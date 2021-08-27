@@ -22,7 +22,7 @@ class CalibratedPlane():
 
         self.plane = None
 
-        cu_mod = py_nvcc_utils.get_module('src/cuda/calibrated_plane.cu')
+        cu_mod = py_nvcc_utils.get_module('calibrated_plane')
         self.make_plane_candidates = cu_mod.get_function('make_plane_candidates')
         self.find_plane_ransac = cu_mod.get_function('find_plane_ransac')
         self.filter_points_by_plane = cu_mod.get_function('filter_points_by_plane')
@@ -37,6 +37,8 @@ class CalibratedPlane():
     def make(self, pts_gpu, img_dims, start_mat = None):
 
         self.rand_generator.fill_uniform(self.rand_cu)
+        # self.rand_cpu = np.random.uniform((self.num_random_guesses, 32), dtype=np.float32)
+        # self.rand_cu.set(self.rand_cpu)
         self.candidate_planes_cu.fill(np.float(0))
 
         DIM_X = img_dims[0]

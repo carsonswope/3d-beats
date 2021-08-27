@@ -260,7 +260,7 @@ class LayeredDecisionForest():
     # def eval()
 class DecisionTreeEvaluator():
     def __init__(self):
-        cu_mod = py_nvcc_utils.get_module('src/cuda/tree_eval.cu')
+        cu_mod = py_nvcc_utils.get_module('tree_eval')
         self.cu_eval_image = cu_mod.get_function('evaluate_image_using_tree')
         self.cu_eval_image_forest = cu_mod.get_function('evaluate_image_using_forest')
         self._make_composite_labels_image = cu_mod.get_function('make_composite_labels_image')
@@ -363,7 +363,7 @@ def make_random_features(n, arr):
 class DecisionTreeTrainer():
     def __init__(self, NUM_IMAGES_PER_IMAGE_BLOCK, NUM_PROPOSALS_PER_PROPOSAL_BLOCK):
         # first load kernels..
-        cu_mod = py_nvcc_utils.get_module('src/cuda/tree_train.cu')
+        cu_mod = py_nvcc_utils.get_module('tree_train')
         self.cu_eval_random_features = cu_mod.get_function('evaluate_random_features')
         self.cu_pick_best_features = cu_mod.get_function('pick_best_features')
         self.cu_copy_pixel_groups = cu_mod.get_function('copy_pixel_groups')

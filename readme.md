@@ -21,5 +21,9 @@ Labeled training data is obtained by using paint to color various sections of th
 - figure out how to build standalone executable/installer..
   - python w/ environment
   - custom package: cpp_grouping
-  - CUDA binaries
+  - cuda precompilation:
+    - fatbins working for cu files written in this repo
+    - pycuda uses autogeneration of other cuda code which has to be compiled by nvcc at runtime ( fill(), anything else? )
+    - also cuRAND (as exposed by pycuda) also apparently requires runtime nvcc invocation
   - model files
+ 
