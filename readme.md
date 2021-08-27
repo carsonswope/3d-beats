@@ -41,9 +41,11 @@ pip install -r requirements.txt
 ```
 
 Now figure out where your `site-packages` directory is:
+
 `python -c 'import site; print(site.getsitepackages())'`
 
 And copy everything in the `deps` directory to that directory:
+
 `cp .\deps\* C:\Users\Carson\miniconda3\envs\env_3d_beats\Lib\site-packages\.`
 
 Unfortunately, `pycuda` must be built from source to get opengl interop. This part can be run from anywhere, doesn't have to be in the repo directory
@@ -59,15 +61,17 @@ python setup.py install
 
 Last but not least, I would recommend downloading the latest [RealSense viewer release](https://github.com/IntelRealSense/librealsense/releases) and use it to upgrade the firmware to the latest D415 fw. Or skip this step but, you know, in case of debugging.
 
-Now for the fun part. Mount the camera above the desk maybe 12-13" in the air. It should be across the desk from you, pointed down at the desk but not directly down. Left-to-right should be the x direction of the camera, and the USB cord should be sticking out to your left, camera's right. This is just to make sure your hands are in the expected orientation, as the model is very sensitive to that kind of thing.
+Now for the fun part. Mount the camera above the desk maybe 12-13" up. It should be across the desk from you, pointed down at the desk but not directly down. Left-to-right should be the x direction of the camera, and the USB cord should be sticking out to your left, camera's right. This is just to make sure your hands are in the expected orientation, as the model is very sensitive to that kind of thing.
 
 First, run the simple demo of the RDF in action, just to make sure the basic pipeline is working. It is expecting a right hand in the view, and nothing else. Make sure the color rendering of the RDF output appears to be accurately identifying different sections of the hand.
 
 (Make sure you are in the root of this repo when running these commands. It will probably take ~30 seconds or so to start up.)
-`python ./src/run_live_layered.py -cfg .\models_out\run_live_multi_layers_config.json`
+
+`python ./src/run_live_layered.py -cfg .\model\model_cfg.json`
 
 Okay, so now the real thing! The idea is that each fingertip and thumb is assigned it's own MIDI note. Keep your left and right hands apart from eachother, and tap on the desk with flat fingers (hope to support more piano-style type fingering soon..). As you tap on the desk, the tap thresholds will calibrate to each finger - so expect performance to improve after tapping with each fingertip a few times. If you open up the 'L' and 'R' thingies in the UI, you can see the graph of the estimated heights of each fingertip over time, and a visual indication of where the thresholds are and whether the note is on or off. Fire up the DAW and have fun!
-`python ./src/3d_bz.py -cfg .\models_out\run_live_multi_layers_config.json`
+
+`python ./src/3d_bz.py -cfg .\model\model_cfg.json`
 
 # TODOs:
 
