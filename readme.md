@@ -67,9 +67,9 @@ cd src/cuda/deps
 git clone https://github.com/g-truc/glm.git
 ```
 
-Last but not least, I would recommend downloading the latest [RealSense viewer release](https://github.com/IntelRealSense/librealsense/releases) and use it to upgrade the firmware to the latest D415 fw. Or skip this step but, you know, in case of debugging.
+Last but not least, I would recommend downloading the latest [RealSense viewer release](https://github.com/IntelRealSense/librealsense/releases) and use it to upgrade the firmware to the latest D415 fw. Or skip this step but, you know, in case of debugging. If you are having issues, you also may want to open up realsense viewer and confirm that the 848x480 depth stream at 90 FPS works there. Sometimes I find that the USB cord needs to be plugged in the 'other' way to the camera to get full USB 3 support (required for 90 FPS).
 
-Now for the fun part. Mount the camera above the desk maybe 12-13" up. It should be across the desk from you, pointed down at the desk but not directly down. Left-to-right should be the x direction of the camera, and the USB cord should be sticking out to your left, camera's right. This is just to make sure your hands are in the expected orientation, as the model is very sensitive to that kind of thing.
+Now for the fun part. Mount the camera above the desk maybe 12-13" up. It should be across the desk from you, pointed down at the desk but not directly down. Left-to-right should be the x direction of the camera, and the USB cord should be sticking out to your left, camera's right. This is just to make sure your hands are in the expected orientation, as the model is very sensitive to that kind of thing. 
 
 First, run the simple demo of the RDF in action, just to make sure the basic pipeline is working. It is expecting a right hand in the view, and nothing else. Make sure the color rendering of the RDF output appears to be accurately identifying different sections of the hand.
 
