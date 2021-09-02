@@ -22,3 +22,7 @@ src/cpp_grouping/*.pyd
 src/cpp_grouping/cpp_grouping.cpp
 
 cuda_fatbin
+
+installer/pyi_build
+installer/pyi_temp
+installer/*.exe

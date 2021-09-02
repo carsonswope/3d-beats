@@ -2,6 +2,9 @@ import cuda.py_nvcc_utils as py_nvcc_utils
 import json
 import numpy as np
 
+from pathlib import Path
+import os.path
+
 import pycuda.gpuarray as cu_array
 import pycuda.driver as cu
 
@@ -177,6 +180,8 @@ class LayeredDecisionForest():
     @staticmethod
     def load(config_filename, eval_dims):
         cfg = json.loads(open(config_filename).read())
+        # models are loaded 1-by-1 from paths with parent directory as a root
+        cfg['root'] = os.path.join(*Path(config_filename).parts[0:-1])
         return LayeredDecisionForest(cfg, eval_dims)
 
     def __init__(self, cfg, eval_dims):
@@ -185,7 +190,8 @@ class LayeredDecisionForest():
         self.eval_dims = eval_dims # y,x !!
         self.m = []
         for l in cfg['layers']:
-            m = DecisionForest.load(l['model'])
+            # model path is relative to config file itself
+            m = DecisionForest.load(os.path.join(cfg['root'], l['model']))
             if 'filter_model' in l and 'filter_model_class in l':
                 filter_model = l['filter_model']
                 filter_model_class = l['filter_model_class']
@@ -194,7 +200,7 @@ class LayeredDecisionForest():
                 filter_model_class = None
             
             self.m.append((m, filter_model, filter_model_class))
-        # self.m = [DecisionForest.load(m) for m in cfg['layers']]
+
         self.num_models = len(self.m)
 
         self.label_images = [GpuBuffer(eval_dims, dtype=np.uint16) for _ in range(self.num_models)]

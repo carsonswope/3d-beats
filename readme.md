@@ -1,4 +1,4 @@
-# 3d Beats v2!
+# 3d-beats
 
 ![Hand Classifier](rdf.gif)
 
@@ -8,9 +8,13 @@ Labeled training data is obtained by using skin paint to color various sections 
 
 To generate fingertip positions, the mean shift algorithm is used to find the center of each classification region. The original depth image is then sampled at the determined pixel, to find the height of each fingertip above the plane. 
 
-## Instructions for installation / development.
+## Installation
 
-Unfortunately, it's not very well packaged for easy distribution at the moment. To start, you will need:
+Download the latest installer from the releases page.
+
+## Instructions for local development
+
+To set up your system for local development, you will need:
 
 - [microsoft visual studio 2019](https://visualstudio.microsoft.com/downloads/) (2019). Unfortunately you have to download the whole thing just to get the compiler toolkit
 - [cuda toolkit](https://developer.nvidia.com/cuda-11.3.0-download-archive?target_os=Windows&target_arch=x86_64) (11.3 ? Maybe other versions would work)
@@ -91,10 +95,6 @@ Okay, so now the real thing! The idea is that each fingertip and thumb is assign
 - make new model. simpler 2-stage RDF architecture:
   - 1. fingertip OR {rest of hand} OR {thumb tip?} (2-3 classes)
   - 2. identify which fingertip (4-5 classes)
-- make midi selection more robust, / UI
-- distribution
-  - python w/ environment. pyinstaller?
-  - precompiled fatbins - WORKING
-  - custom package: cpp_grouping
-  - model files
+- make midi selection more robust / provide UI for it
 - cuda/opengl cleanup errors in console
+- clean up gui layout - sensible defaults so imgui.ini not necessary

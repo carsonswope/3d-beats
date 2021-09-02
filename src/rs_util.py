@@ -21,11 +21,12 @@ def start_stream(args):
         pipeline_wrapper = rs.pipeline_wrapper(pipeline)
         pipeline_profile = config.resolve(pipeline_wrapper)
         device = pipeline_profile.get_device()
+        # in the place where the original command was run, this file must be available
         device_config_json = open('hand_config.json', 'r').read()
         rs.rs400_advanced_mode(device).load_json(device_config_json)
         device.first_depth_sensor().set_option(rs.option.depth_units, 0.0001)
         config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 90)
-    
+
     profile = pipeline.start(config)
     if rs_bag:
         profile.get_device().as_playback().set_real_time(False)

@@ -37,8 +37,6 @@ class CalibratedPlane():
     def make(self, pts_gpu, img_dims, start_mat = None):
 
         self.rand_generator.fill_uniform(self.rand_cu)
-        # self.rand_cpu = np.random.uniform((self.num_random_guesses, 32), dtype=np.float32)
-        # self.rand_cu.set(self.rand_cpu)
         self.candidate_planes_cu.fill(np.float(0))
 
         DIM_X = img_dims[0]
