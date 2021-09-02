@@ -1,15 +1,15 @@
 from OpenGL.GL import * 
-# import glfw
 import pyrealsense2 as rs
 import numpy as np
-# import cv2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
 import argparse
 import imgui
+import pycuda.compiler
 
 from decision_tree import *
 from cuda.points_ops import *
 from calibrated_plane import *
 from engine.texture import GpuTexture
+import cuda.py_nvcc_utils as py_nvcc_utils
 
 from engine.window import AppBase, run_app
 from engine.buffer import GpuBuffer
@@ -23,7 +23,10 @@ class RunLive_Layered(AppBase):
         parser.add_argument('--rs_bag', nargs='?', required=False, type=str, help='Path to optional input realsense .bag file to use instead of live camera stream')
         parser.add_argument('--plane_num_iterations', nargs='?', required=False, type=int, help='Num random planes to propose looking for best fit')
         parser.add_argument('--plane_z_threshold', nargs='?', required=False, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
-        args = parser.parse_known_args()[0]
+        py_nvcc_utils.add_args(parser)
+        args = parser.parse_args()
+
+        py_nvcc_utils.config_compiler(args)
 
         RS_BAG = args.rs_bag
 
@@ -152,7 +155,6 @@ class RunLive_Layered(AppBase):
             np.uint32(self.DIM_Y),
             np.uint32(self.layered_rdf.num_layered_classes),
             self.labels_image.cu(),
-            # self.layered_rdf.label_images[1].cu(),
             self.layered_rdf.label_colors.cu(),
             self.labels_image_rgba.cu(),
             grid = ((self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1, 1),

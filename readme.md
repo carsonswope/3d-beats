@@ -50,10 +50,10 @@ And copy everything in the `deps` directory to that directory:
 
 `cp .\deps\* C:\Users\Carson\miniconda3\envs\env_3d_beats\Lib\site-packages\.`
 
-Unfortunately, `pycuda` must be built from source to get opengl interop. This part can be run from anywhere, doesn't have to be in the repo directory. But make sure you still are running these commands from inside the correct conda python environment.
+Unfortunately, `pycuda` must be built from source to get opengl interop. This part can be run from anywhere, doesn't have to be in the repo directory. A fork of this library is used which provides support for precompilation of CUDA 'fatbin' files, which can be used in place of the just-in-time compilation (eliminating the need for nvcc and msvc to be installed and available in the path). You can download the original repo from [](https://github.com/inducer/pycuda.git)
 
 ```
-git clone git clone https://github.com/inducer/pycuda.git
+git clone git clone https://github.com/carsonswope/pycuda.git
 cd pycuda
 git submodule update --init
 python ./configure.py --cuda-enable-gl
