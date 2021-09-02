@@ -1,0 +1,119 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "live_data_convert",
+            "type": "python",
+            "request": "launch",
+            "program": "./src/live_data_convert.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-i", "./datagen/sets/test1/t0.bag",
+                "-o", "./datagen/sets/test1/t0_out/",
+                "--colors", "4",
+                "--plane_z_threshold", "55."
+            ]
+        },
+        {
+            "name": "merge_datasets",
+            "type": "python",
+            "request": "launch",
+            "program": "./src/merge_datasets.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-m", "./datagen/sets/full_4class/random_1/d123_randomized_mapping.json",
+                "-o", "./datagen/sets/full_4class/random_1/d123/"
+            ]
+        },
+        {
+            "name": "train_model",
+            "type": "python",
+            "request": "launch",
+            "program": "./src/train_model.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-o", "./models_out/random1_d.npy",
+                "-d", "./datagen/sets/full_4class/random_1/d123/",
+                "--train", "2048",
+                "--train_block", "256",
+                "--test", "512",
+                "--proposals", "4096",
+                "--proposals_block", "256",
+                "--out_trees", "4",
+                "--trees_to_try", "4",
+                "--depth", "18"
+            ]
+        },
+        {
+            "name": "test_on_saved_model",
+            "type": "python",
+            "request": "launch",
+            "program": "./src/test_on_saved_model.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-m", "./models_out/random1_d.npy",
+                "-d", "./datagen/sets/full_4class/random_1/d123/",
+                "-o", "./evals/",
+                "--test", "128"
+            ]
+        }, 
+        {
+            "name": "run_live",
+            "type": "python",
+            "request": "launch",
+            "program": "./src/run_live.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-m", "./models_out/random1_d.npy",
+                "-d", "./datagen/sets/full_4class/random_1/d123/",
+                "--rs_bag", "./datagen/sets/test1/t0.bag",
+                "--plane_z_threshold", "50.",
+            ]
+        },
+        {
+            "name": "run_live_layered",
+            "type": "python",
+            "request": "launch",
+            "program": "./src/run_live_layered.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-cfg", "./models_out/run_live_multi_layers_config.json",
+                "--rs_bag", "./datagen/sets/test1/t0.bag",
+                "--fatbin_in", "cuda_fatbin"
+            ]
+        },
+        {
+            "name": "3d_bz",
+            "type": "python",
+            "request": "launch",
+            "program": "./src/3d_bz.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-cfg", "./models_out/run_live_multi_layers_config.json",
+            ]
+        },
+        {
+            "name": "pose_fit",
+            "type": "python",
+            "request": "launch",
+            "program": "./src/pose_fit.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-m", "./models_out/random1_d.npy",
+                "-d", "./datagen/sets/full_4class/random_1/d123/",
+                "--rs_bag", "./datagen/sets/full_4class/d1.bag",
+                "--plane_z_threshold", "50.",
+            ]
+        },
+        {
+            "name": "make fatbins",
+            "type": "python",
+            "request": "launch",
+            "program": "./src/make_fatbins.py",
+            "console": "integratedTerminal"
+        }
+    ]
+}

@@ -2,11 +2,6 @@ from OpenGL.GL import *
 
 import pyrealsense2 as rs
 import numpy as np
-# import cv2
-# import math
-# import time
-
-import pycuda.driver as cu
 
 from decision_tree import *
 from cuda.points_ops import *
@@ -17,6 +12,9 @@ from engine.texture import GpuTexture
 from engine.window import AppBase, run_app
 from engine.buffer import GpuBuffer
 from engine.profile_timer import ProfileTimer
+
+import cuda.py_nvcc_utils as py_nvcc_utils
+import rs_util
 
 from util import make_grid, MAX_UINT16
 
@@ -38,17 +36,17 @@ class App_3d_bz(AppBase):
 
         parser = argparse.ArgumentParser(description='Train a classifier RDF for depth images')
         parser.add_argument('-cfg', nargs='?', required=True, type=str, help='Path to the layered decision forest config file')
-        parser.add_argument('--rs_bag', nargs='?', required=False, type=str, help='Path to optional input realsense .bag file to use instead of live camera stream')
         parser.add_argument('--plane_num_iterations', nargs='?', required=False, type=int, help='Num random planes to propose looking for best fit')
-        # parser.add_argument('--plane_z_threshold', nargs='?', required=True, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
-        args = parser.parse_known_args()[0]
+        py_nvcc_utils.add_args(parser)
+        rs_util.add_args(parser)
+        args = parser.parse_args()
+
+        py_nvcc_utils.config_compiler(args)
 
         # TODO: correctly find midi out port!
         self.midi_out = rtmidi.MidiOut()
         # available_ports = self.midi_out.get_ports()
         self.midi_out.open_port(1) # loopbe port..
-
-        RS_BAG = args.rs_bag
 
         self.NUM_RANDOM_GUESSES = args.plane_num_iterations or 25000
         self.PLANE_Z_OUTLIER_THRESHOLD = 40.
@@ -75,37 +73,8 @@ class App_3d_bz(AppBase):
         self.mean_shift = MeanShift()
 
         print('initializing camera..')
-        # Configure depth and color streams
-        self.pipeline = rs.pipeline()
-        self.config = rs.config()
+        self.pipeline, self.depth_intrin, self.DIM_X, self.DIM_Y, self.FOCAL, self.PP = rs_util.start_stream(args)
 
-        if RS_BAG:
-            self.config.enable_device_from_file(RS_BAG, repeat_playback=True)
-            self.config.enable_stream(rs.stream.depth, rs.format.z16)
-            self.config.enable_stream(rs.stream.color, rs.format.rgb8)
-
-        else:
-            # Get device product line for setting a supporting resolution
-            pipeline_wrapper = rs.pipeline_wrapper(self.pipeline)
-            pipeline_profile = self.config.resolve(pipeline_wrapper)
-            device = pipeline_profile.get_device()
-            device_config_json = open('hand_config.json', 'r').read()
-            rs.rs400_advanced_mode(device).load_json(device_config_json)
-            device.first_depth_sensor().set_option(rs.option.depth_units, 0.0001)
-            self.config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 90)
-
-        profile = self.pipeline.start(self.config)
-        if RS_BAG:
-            profile.get_device().as_playback().set_real_time(False)
-        depth_profile = profile.get_stream(rs.stream.depth).as_video_stream_profile()
-        depth_intrin = depth_profile.get_intrinsics()
-        self.depth_intrin = depth_intrin
-
-        self.DIM_X = depth_intrin.width
-        self.DIM_Y = depth_intrin.height
-
-        self.FOCAL = depth_intrin.fx
-        self.PP = np.array([depth_intrin.ppx, depth_intrin.ppy], dtype=np.float32)
         self.pts_cu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.float32)
         self.depth_image = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
         self.depth_image_2 = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
@@ -129,7 +98,6 @@ class App_3d_bz(AppBase):
         self.labels_image_rgba_cpu = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
         self.labels_image_rgba = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
         self.labels_image_rgba_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
-
 
         mean_shift_variances = np.array(
             [100., 40., 60., 50., 50., 50., 50., 50., 50., 50., 50., 50., 50., 50., 50.],

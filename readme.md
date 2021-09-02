@@ -92,12 +92,9 @@ Okay, so now the real thing! The idea is that each fingertip and thumb is assign
   - 1. fingertip OR {rest of hand} OR {thumb tip?} (2-3 classes)
   - 2. identify which fingertip (4-5 classes)
 - make midi selection more robust, / UI
-- figure out how to build standalone executable/installer..
-  - python w/ environment
+- distribution
+  - python w/ environment. pyinstaller?
+  - precompiled fatbins - WORKING
   - custom package: cpp_grouping
-  - cuda precompilation:
-    - fatbins working for cu files written in this repo
-    - pycuda uses autogeneration of other cuda code which has to be compiled by nvcc at runtime ( fill(), anything else? )
-    - also cuRAND (as exposed by pycuda) also apparently requires runtime nvcc invocation
   - model files
- 
+- cuda/opengl cleanup errors in console

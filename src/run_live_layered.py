@@ -1,15 +1,15 @@
 from OpenGL.GL import * 
-import pyrealsense2 as rs
+import pyrealsense2
 import numpy as np
 import argparse
 import imgui
-import pycuda.compiler
 
 from decision_tree import *
 from cuda.points_ops import *
 from calibrated_plane import *
 from engine.texture import GpuTexture
 import cuda.py_nvcc_utils as py_nvcc_utils
+import rs_util
 
 from engine.window import AppBase, run_app
 from engine.buffer import GpuBuffer
@@ -20,54 +20,21 @@ class RunLive_Layered(AppBase):
 
         parser = argparse.ArgumentParser(description='Train a classifier RDF for depth images')
         parser.add_argument('-cfg', nargs='?', required=True, type=str, help='Path to the layered decision forest config file')
-        parser.add_argument('--rs_bag', nargs='?', required=False, type=str, help='Path to optional input realsense .bag file to use instead of live camera stream')
         parser.add_argument('--plane_num_iterations', nargs='?', required=False, type=int, help='Num random planes to propose looking for best fit')
         parser.add_argument('--plane_z_threshold', nargs='?', required=False, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
         py_nvcc_utils.add_args(parser)
+        rs_util.add_args(parser)
         args = parser.parse_args()
 
         py_nvcc_utils.config_compiler(args)
-
-        RS_BAG = args.rs_bag
 
         NUM_RANDOM_GUESSES = args.plane_num_iterations or 25000
         self.PLANE_Z_OUTLIER_THRESHOLD = args.plane_z_threshold or 40.
 
         self.calibrated_plane = CalibratedPlane(NUM_RANDOM_GUESSES, self.PLANE_Z_OUTLIER_THRESHOLD)
 
-        print('initializing camera..')
-        # Configure depth and color streams
-        self.pipeline = rs.pipeline()
-        self.config = rs.config()
+        self.pipeline, self.depth_intrin, self.DIM_X, self.DIM_Y, self.FOCAL, self.PP = rs_util.start_stream(args)
 
-        if RS_BAG:
-            self.config.enable_device_from_file(RS_BAG, repeat_playback=True)
-            self.config.enable_stream(rs.stream.depth, rs.format.z16)
-            self.config.enable_stream(rs.stream.color, rs.format.rgb8)
-
-        else:
-            # Get device product line for setting a supporting resolution
-            pipeline_wrapper = rs.pipeline_wrapper(self.pipeline)
-            pipeline_profile = self.config.resolve(pipeline_wrapper)
-            device = pipeline_profile.get_device()
-            device_config_json = open('hand_config.json', 'r').read()
-            rs.rs400_advanced_mode(device).load_json(device_config_json)
-            device.first_depth_sensor().set_option(rs.option.depth_units, 0.0001)
-            self.config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 90)
-
-        profile = self.pipeline.start(self.config)
-        if RS_BAG:
-            profile.get_device().as_playback().set_real_time(False)
-        depth_profile = profile.get_stream(rs.stream.depth).as_video_stream_profile()
-        depth_intrin = depth_profile.get_intrinsics()
-
-        self.DIM_X = depth_intrin.width
-        self.DIM_Y = depth_intrin.height
-
-        self.FOCAL = depth_intrin.fx
-        self.PP = np.array([depth_intrin.ppx, depth_intrin.ppy], dtype=np.float32)
-
-        print('initializing')
         self.layered_rdf = LayeredDecisionForest.load(args.cfg, (self.DIM_Y, self.DIM_X))
         self.points_ops = PointsOps()
 
@@ -83,6 +50,9 @@ class RunLive_Layered(AppBase):
 
     def splash(self):
         imgui.text('loading...')
+
+    def cleanup(self):
+        self.pipeline.stop()
 
     def tick(self, t):
         

@@ -102,6 +102,9 @@ class AppBase():
     # def __del__(self):
         # glfw.terminate()
 
+    def cleanup(self):
+        pass
+
     def run(self):
 
         start_time = time.perf_counter()
@@ -135,6 +138,8 @@ class AppBase():
             self.ms_per_frame_log.append(t_frame * 1000) # s -> ms
             while len(self.ms_per_frame_log) > self.ms_per_frame_log_max:
                 self.ms_per_frame_log.pop(0)
+
+        self.cleanup()
 
         pycuda.autoinit.context.pop()
 
