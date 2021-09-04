@@ -136,7 +136,7 @@ class RunLiveApp(AppBase):
         self.frame_num += 1
 
         imgui.text("f: " + str(self.frame_num))
-        imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 2, self.DIM_Y * 2)
+        imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * self.dpi_scale, self.DIM_Y * self.dpi_scale)
 
 if __name__ == '__main__':
     run_app(RunLiveApp)

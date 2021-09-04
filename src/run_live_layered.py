@@ -48,6 +48,8 @@ class RunLive_Layered(AppBase):
 
         self.frame_num = 0
 
+        self.x = 5
+
     def splash(self):
         imgui.text('loading...')
 
@@ -133,7 +135,7 @@ class RunLive_Layered(AppBase):
 
         self.frame_num += 1
 
-        imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * 2, self.DIM_Y * 2)
+        imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * self.dpi_scale, self.DIM_Y * self.dpi_scale)
 
 if __name__ == '__main__':
     run_app(RunLive_Layered)

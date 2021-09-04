@@ -8,6 +8,7 @@ import pycuda.gl
 import numpy as np
 np.set_printoptions(suppress=True)
 
+import gc
 import time
 
 class AppBase():
@@ -25,15 +26,16 @@ class AppBase():
         self.window = glfw.create_window(width, height, title, None, None)
         glfw.make_context_current(self.window)
 
-        # glfwSwapInterval( 0 );
         glfw.swap_interval(0)
 
         imgui.create_context()
         self.imgui = GlfwRenderer(self.window)
         self.imgui_io = imgui.get_io()
 
-        # images still very small..
-        self.imgui_io.font_global_scale = 2.0
+        # TODO: can this be improved?
+        m = glfw.get_primary_monitor()
+        self.dpi_scale, _ = glfw.get_monitor_content_scale(m)
+        self.imgui_io.font_global_scale = self.dpi_scale
 
         import pycuda.autoinit
         self.cu_ctx = pycuda.gl.make_context(pycuda.autoinit.device)
@@ -127,7 +129,8 @@ class AppBase():
 
             self.imgui.process_inputs()
             imgui.render()
-            self.imgui.render(imgui.get_draw_data())
+            draw_data = imgui.get_draw_data()
+            self.imgui.render(draw_data)
             imgui.end_frame()
 
             glfw.swap_buffers(self.window)
@@ -141,10 +144,16 @@ class AppBase():
 
         self.cleanup()
 
-        pycuda.autoinit.context.pop()
-
 def run_app(A):
     a = A()
     a.run()
+    # RAII does not play well w/ python & GC. 
+    # This is to force destructors to be called on GPU buffer/texture handles
+    for p in dir(a):
+        try:
+            delattr(a, p)
+        except:
+            pass
     del a
+    pycuda.autoinit.context.pop()
     glfw.terminate()
