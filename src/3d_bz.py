@@ -12,6 +12,7 @@ from engine.texture import GpuTexture
 from engine.window import AppBase, run_app
 from engine.buffer import GpuBuffer
 from engine.profile_timer import ProfileTimer
+from engine.midi import Midi
 
 import cuda.py_nvcc_utils as py_nvcc_utils
 import rs_util
@@ -26,11 +27,13 @@ import argparse
 
 import imgui
 
-import rtmidi
-
 class App_3d_bz(AppBase):
     def __init__(self):
-        super().__init__(title="3d-beats", width=1920, height=1500)
+
+        width = 1920
+        height = 1080
+
+        super().__init__(title="3d-beats", width=width, height=height)
 
         self.t = ProfileTimer()
 
@@ -43,15 +46,10 @@ class App_3d_bz(AppBase):
 
         py_nvcc_utils.config_compiler(args)
 
-        # TODO: correctly find midi out port!
-        self.midi_out = rtmidi.MidiOut()
-        # available_ports = self.midi_out.get_ports()
-        self.midi_out.open_port(1) # loopbe port..
+        self.midi = Midi()
 
         self.NUM_RANDOM_GUESSES = args.plane_num_iterations or 25000
         self.PLANE_Z_OUTLIER_THRESHOLD = 40.
-
-        # self.DEFAULT_FINGERTIP_THRESHOLD = 140. # very generous threshold. will be refined by auto calibration
 
         self.gauss_sigma = 2.5
         self.z_thresh_offset = 25.
@@ -109,8 +107,8 @@ class App_3d_bz(AppBase):
         # (z_thresh, midi_note)
         init_hand_state = lambda n: [(self.DEFAULT_FINGERTIP_THRESHOLDS[i], n+i) for i in range(len(self.fingertip_idxes))]
 
-        on_fn = lambda n,v: self.midi_out.send_message([0x90, n, v])
-        off_fn = lambda n: self.midi_out.send_message([0x80, n, 0])
+        on_fn = lambda n,v: self.midi.send([0x90, n, v])
+        off_fn = lambda n: self.midi.send([0x80, n, 0])
 
         # fingers: 0 = index, 1 = middle, 2 = ring, 3 = pinky
         self.hand_states = [
@@ -120,12 +118,12 @@ class App_3d_bz(AppBase):
         self.frame_num = 0
 
     def splash(self):
+        self.begin_imgui_main()
         imgui.text('loading...')
-    
+        imgui.end()
+
     def tick(self, _):
 
-
-        # Wait for a coherent pair of frames: depth and color
         frames = self.pipeline.wait_for_frames()
 
         # start frame timer after we get the depth frame.
@@ -140,7 +138,9 @@ class App_3d_bz(AppBase):
 
         # let camera stabilize for a few frames
         elif self.frame_num < 15:
+            self.begin_imgui_main()
             imgui.text('loading... ...')
+            imgui.end()
             self.frame_num += 1
             return
 
@@ -278,7 +278,9 @@ class App_3d_bz(AppBase):
         self.labels_image_rgba_tex.copy_from_gpu_buffer(self.labels_image_rgba)
 
         self.t.record('imgui')
-        
+
+        self.begin_imgui_main()
+
         imgui.text('running!')
 
         # per finger calibration
@@ -305,10 +307,14 @@ class App_3d_bz(AppBase):
 
         imgui.text(':)')
 
+        self.midi.draw_imgui()
+
         # imgui.image(self.depth_image_mm_rgba_tex.gl(), self.DIM_X / 2., self.DIM_Y / 2.)
         # imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X, self.DIM_Y)
 
         imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * self.dpi_scale, self.DIM_Y * self.dpi_scale)
+
+        imgui.end()
 
         times = self.t.render()
         imgui.begin('profile timer')
@@ -448,7 +454,7 @@ class App_3d_bz(AppBase):
 
         for i, f_idx in zip(range(len(self.fingertip_idxes)), self.fingertip_idxes):
 
-            px, py = label_means[f_idx-1].astype(np.int)
+            px, py = label_means[f_idx-1].astype(np.int32)
             if px < 0 or py < 0 or px >= self.DIM_X or py >= self.DIM_Y:
                 hand_state.fingertips[i].reset_positions()
             else:

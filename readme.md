@@ -100,6 +100,5 @@ Now try the full 3d-beats app.
 - make new model. simpler 2-stage RDF architecture:
   - 1. fingertip OR {rest of hand} OR {thumb tip?} (2-3 classes)
   - 2. identify which fingertip (4-5 classes)
-- make midi selection more robust / provide UI for it
 - clean up gui layout - sensible defaults so imgui.ini not necessary
 - support for monitors of varying DPIs

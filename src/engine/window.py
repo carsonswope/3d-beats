@@ -23,7 +23,11 @@ class AppBase():
         glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, GL_TRUE)
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
         
-        self.window = glfw.create_window(width, height, title, None, None)
+        # TODO: can this be improved?
+        m = glfw.get_primary_monitor()
+        self.dpi_scale, _ = glfw.get_monitor_content_scale(m)
+
+        self.window = glfw.create_window(int(self.width * self.dpi_scale), int(self.height * self.dpi_scale), title, None, None)
         glfw.make_context_current(self.window)
 
         glfw.swap_interval(0)
@@ -32,9 +36,6 @@ class AppBase():
         self.imgui = GlfwRenderer(self.window)
         self.imgui_io = imgui.get_io()
 
-        # TODO: can this be improved?
-        m = glfw.get_primary_monitor()
-        self.dpi_scale, _ = glfw.get_monitor_content_scale(m)
         self.imgui_io.font_global_scale = self.dpi_scale
 
         import pycuda.autoinit
@@ -83,6 +84,14 @@ class AppBase():
                 if k == key:
                     fn(action)
 
+    # 'background' window which is basically like writing directly to the main screen
+    def begin_imgui_main(self):
+        imgui.set_next_window_position(0, 0)
+        imgui.set_next_window_size(self.width * self.dpi_scale, self.height * self.dpi_scale)
+        imgui.set_next_window_bg_alpha(0.0)
+        imgui.begin('##main',
+            flags= imgui.WINDOW_NO_MOVE | imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_TITLE_BAR | imgui.WINDOW_NO_BRING_TO_FRONT_ON_FOCUS)
+
     # def key_event(self, key, action, modifiers):
     #     self.imgui.key_event(key, action, modifiers)
         
@@ -100,12 +109,6 @@ class AppBase():
 
     # def mouse_release_event(self, x: int, y: int, button: int):
     #     self.imgui.mouse_release_event(x, y, button)
-    # def __del
-    # def __del__(self):
-        # glfw.terminate()
-
-    def cleanup(self):
-        pass
 
     def run(self):
 
@@ -114,8 +117,12 @@ class AppBase():
         while not glfw.window_should_close(self.window):
             t = time.perf_counter() - start_time
 
-            glfw.poll_events()
+            # should be able to do this via on_resize callback instead!
+            w_width, w_height = glfw.get_window_size(self.window)
+            self.width = int(w_width / self.dpi_scale)
+            self.height = int(w_height / self.dpi_scale)
 
+            glfw.poll_events()
 
             glClearColor(0, 0, 0, 1)
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -141,8 +148,6 @@ class AppBase():
             self.ms_per_frame_log.append(t_frame * 1000) # s -> ms
             while len(self.ms_per_frame_log) > self.ms_per_frame_log_max:
                 self.ms_per_frame_log.pop(0)
-
-        self.cleanup()
 
 def run_app(A):
     a = A()

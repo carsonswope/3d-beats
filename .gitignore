@@ -26,3 +26,5 @@ cuda_fatbin
 installer/pyi_build
 installer/pyi_temp
 installer/*.exe
+
+*.bag
