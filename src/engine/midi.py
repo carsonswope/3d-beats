@@ -20,7 +20,7 @@ class Midi:
         self.available_ports = [(i,p) for i,p in enumerate(self.m.get_ports())]
 
     def draw_imgui(self):
-        imgui.text('MIDI Port:')
+        imgui.text('MIDI out:')
         imgui.same_line()
         imgui.push_item_width(300.)
         clicked, current = imgui.combo("##midi-dropdown", self.open_port_idx, [p for _,p in self.available_ports])

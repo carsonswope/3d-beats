@@ -12,16 +12,20 @@ import gc
 import time
 
 class AppBase():
-    def __init__(self, width=1920, height=1080, title="My Window"):
+    def __init__(self, width=1920, height=1080, title="My Window", resizeable=True):
 
         self.width = width
         self.height = height
+        self.window_resizeable = resizeable
 
         glfw.init()
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 4)
         glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 1)  
         glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, GL_TRUE)
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+
+        if not resizeable:
+            glfw.window_hint(glfw.RESIZABLE, GL_FALSE)
         
         # TODO: can this be improved?
         m = glfw.get_primary_monitor()
@@ -118,9 +122,10 @@ class AppBase():
             t = time.perf_counter() - start_time
 
             # should be able to do this via on_resize callback instead!
-            w_width, w_height = glfw.get_window_size(self.window)
-            self.width = int(w_width / self.dpi_scale)
-            self.height = int(w_height / self.dpi_scale)
+            if self.window_resizeable:
+                w_width, w_height = glfw.get_window_size(self.window)
+                self.width = int(w_width / self.dpi_scale)
+                self.height = int(w_height / self.dpi_scale)
 
             glfw.poll_events()
 

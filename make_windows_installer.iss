@@ -46,9 +46,9 @@ Type: filesandordirs; Name: "{app}"
 [Icons]
 ; Name: "{app}\{#APP_NAME}"; Filename: "{app}\{#APP_NAME}"
 Name: "{app}\{#APP_NAME}"; Filename: "{app}\{#APP_EXE}"; \
-    Parameters: "-cfg {app}\{#model_cfg} --fatbin_in {app}\{#fatbin_dir}"
+    Parameters: "-cfg {app}\{#model_cfg} --fatbin_in {app}\{#fatbin_dir} --no_debug"
 Name: "{autoprograms}\{#APP_NAME}"; Filename: "{app}\{#APP_EXE}"; \
-    Parameters: "-cfg {app}\{#model_cfg} --fatbin_in {app}\{#fatbin_dir}"
+    Parameters: "-cfg {app}\{#model_cfg} --fatbin_in {app}\{#fatbin_dir} --no_debug"
 Name: "{autodesktop}\{#APP_NAME}"; Filename: "{app}\{#APP_EXE}";  \
-    Parameters: "-cfg {#model_cfg} --fatbin_in {#fatbin_dir}"; Tasks: desktopicon
+    Parameters: "-cfg {#model_cfg} --fatbin_in {#fatbin_dir} --no_debug"; Tasks: desktopicon
 

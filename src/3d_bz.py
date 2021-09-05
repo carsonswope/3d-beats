@@ -30,16 +30,17 @@ import imgui
 class App_3d_bz(AppBase):
     def __init__(self):
 
-        width = 1920
-        height = 1080
+        width = 848
+        height = 826
 
-        super().__init__(title="3d-beats", width=width, height=height)
+        super().__init__(title="3d-beats", width=width, height=height, resizeable=False)
 
         self.t = ProfileTimer()
 
         parser = argparse.ArgumentParser(description='Train a classifier RDF for depth images')
         parser.add_argument('-cfg', nargs='?', required=True, type=str, help='Path to the layered decision forest config file')
         parser.add_argument('--plane_num_iterations', nargs='?', required=False, type=int, help='Num random planes to propose looking for best fit')
+        parser.add_argument('--no_debug', required=False, action='store_true', help='Hides debug info if set')
         py_nvcc_utils.add_args(parser)
         rs_util.add_args(parser)
         args = parser.parse_args()
@@ -47,6 +48,8 @@ class App_3d_bz(AppBase):
         py_nvcc_utils.config_compiler(args)
 
         self.midi = Midi()
+
+        self.NO_DEBUG = args.no_debug
 
         self.NUM_RANDOM_GUESSES = args.plane_num_iterations or 25000
         self.PLANE_Z_OUTLIER_THRESHOLD = 40.
@@ -112,8 +115,8 @@ class App_3d_bz(AppBase):
 
         # fingers: 0 = index, 1 = middle, 2 = ring, 3 = pinky
         self.hand_states = [
-            HandState(init_hand_state(36), on_fn, off_fn),
-            HandState(init_hand_state(41), on_fn, off_fn)]
+            HandState(init_hand_state(36), on_fn, off_fn, is_rh=True),
+            HandState(init_hand_state(41), on_fn, off_fn, is_rh=False)]
 
         self.frame_num = 0
 
@@ -137,7 +140,7 @@ class App_3d_bz(AppBase):
             return
 
         # let camera stabilize for a few frames
-        elif self.frame_num < 15:
+        elif self.frame_num < 10:
             self.begin_imgui_main()
             imgui.text('loading... ...')
             imgui.end()
@@ -200,7 +203,7 @@ class App_3d_bz(AppBase):
                 self.depth_image_2,
                 self.depth_image,
                 sigma=self.gauss_sigma,
-                k_size=11)
+                k_size=7)
 
         # make smaller depth image. faster to copy and process cpu-side
         self.points_ops.shrink_image(
@@ -281,59 +284,87 @@ class App_3d_bz(AppBase):
 
         self.begin_imgui_main()
 
-        imgui.text('running!')
+        imgui.set_cursor_pos((0, 220 * self.dpi_scale))
+        imgui.image(
+            self.labels_image_rgba_tex.gl(),
+            self.DIM_X * self.dpi_scale,
+            self.DIM_Y * self.dpi_scale,
+            uv0=(1,0), uv1=(0,1)) # flip x and y to look like a mirror!
+
+        imgui.end()
+
+        window_pad = 24 * self.dpi_scale
+
+        imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (window_pad, window_pad))
+        imgui.set_next_window_position(0, 0)#self.DIM_Y * self.dpi_scale)
+        imgui.set_next_window_size(self.width * self.dpi_scale, 220 * self.dpi_scale)
+        imgui.set_next_window_bg_alpha(0.3)
+        imgui.begin('Hand state', flags= imgui.WINDOW_NO_MOVE | imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_TITLE_BAR | imgui.WINDOW_NO_SCROLLBAR)
+
+        pos_start_x, pos_start_y = imgui.get_cursor_pos()
+        # left hand on left side of screen
+        self.hand_states[1].draw_imgui(self.z_thresh_offset, self.dpi_scale, (pos_start_x, pos_start_y))
+        # right hand on right
+        self.hand_states[0].draw_imgui(self.z_thresh_offset, self.dpi_scale, (pos_start_x + (self.width * self.dpi_scale / 2), pos_start_y))
 
         # per finger calibration
-        if imgui.button('reset fingertip calibration'):
+        imgui.new_line()
+        if imgui.button('reset fingers'):
             for h in self.hand_states:
                 for f, t in zip(h.fingertips, self.DEFAULT_FINGERTIP_THRESHOLDS):
                     f.z_thresh = t
-
+        
+        imgui.same_line()
         self.calibrate_next_frame = imgui.button('recalibrate plane')
 
-        _, self.PLANE_Z_OUTLIER_THRESHOLD = imgui.slider_float('plane threshold', self.PLANE_Z_OUTLIER_THRESHOLD, 0., 100.)
-
-        _, self.z_thresh_offset = imgui.slider_float('fingertip z threshold offset', self.z_thresh_offset, 0., 100.)
-
-        _, self.min_velocity = imgui.slider_float('min velocity', self.min_velocity, 0., 100.)
-
-        if imgui.tree_node('R'):
-            self.hand_states[0].draw_imgui(self.z_thresh_offset)
-            imgui.tree_pop()
-
-        if imgui.tree_node('L'):
-            self.hand_states[1].draw_imgui(self.z_thresh_offset)
-            imgui.tree_pop()
-
-        imgui.text(':)')
-
+        imgui.new_line()
         self.midi.draw_imgui()
+
+        imgui.end()
+
+
+        imgui.set_next_window_position(0, (self.DIM_Y + 220) * self.dpi_scale)
+        imgui.set_next_window_size(400 * self.dpi_scale, 124 * self.dpi_scale)
+        imgui.set_next_window_bg_alpha(0.3)
+        imgui.begin('settings', flags=imgui.WINDOW_NO_MOVE | imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_TITLE_BAR | imgui.WINDOW_NO_SCROLLBAR)
+        imgui.text('settings')
+        imgui.push_item_width(150. * self.dpi_scale)
+        _, self.PLANE_Z_OUTLIER_THRESHOLD = imgui.slider_float('plane threshold', self.PLANE_Z_OUTLIER_THRESHOLD, 0., 100.)
+        _, self.z_thresh_offset = imgui.slider_float('finger threshold offset', self.z_thresh_offset, 0., 100.)
+        _, self.min_velocity = imgui.slider_float('min velocity', self.min_velocity, 0., 100.)
+        imgui.pop_item_width()
+
 
         # imgui.image(self.depth_image_mm_rgba_tex.gl(), self.DIM_X / 2., self.DIM_Y / 2.)
         # imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X, self.DIM_Y)
 
-        imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * self.dpi_scale, self.DIM_Y * self.dpi_scale)
+        imgui.end()        
 
-        imgui.end()
+        imgui.set_next_window_position(400 * self.dpi_scale, (self.DIM_Y + 220) * self.dpi_scale)
+        imgui.set_next_window_size(200 * self.dpi_scale, 124 * self.dpi_scale)
+        imgui.set_next_window_bg_alpha(0.3)
+        imgui.begin('profile', flags=imgui.WINDOW_NO_MOVE | imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_TITLE_BAR | imgui.WINDOW_NO_SCROLLBAR)
 
-        times = self.t.render()
-        imgui.begin('profile timer')
-        for t in times:
-            imgui.text(t)
+        profile_plot_width = 150 * self.dpi_scale
+        profile_plot_height = 60 * self.dpi_scale
 
-        imgui.plot_lines('ms per frame',
+        imgui.text(f'ms/frame: {"{:.1f}".format(self.ms_per_frame_log[-1])}')
+        imgui.plot_lines('##ms-frame',
             np.array(self.ms_per_frame_log, dtype=np.float32),
             scale_max=100.,
             scale_min=0.,
-            graph_size=(300,200))
-        
-        imgui.plot_lines('FPS',
-            1000. / np.array(self.ms_per_frame_log, dtype=np.float32),
-            scale_max=100.,
-            scale_min=0.,
-            graph_size=(300,200))
+            graph_size=(profile_plot_width , profile_plot_height))
 
         imgui.end()
+
+        if not self.NO_DEBUG:
+            imgui.begin('timer stats')        
+            times = self.t.render()
+            for t in times:
+                imgui.text(t)
+            imgui.end()
+
+        imgui.pop_style_var()
 
         self.frame_num += 1
 

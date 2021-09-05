@@ -4,7 +4,7 @@
 block_cipher = None
 
 SITE_PACKAGES = 'C:/Users/Carson/miniconda3/envs/env_3d_beats/Lib/site-packages/'
-REPO_ROOT = 'C:/Users/Carson/code/hand_decision_trees'
+REPO_ROOT = 'C:/Users/Carson/code/3d-beats'
 
 a = Analysis([REPO_ROOT + '/src/3d_bz.py'],
              pathex=[REPO_ROOT],
