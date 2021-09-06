@@ -1,7 +1,7 @@
 from OpenGL.GL import *
 import pyrealsense2 as rs
 import numpy as np
-import cv2
+# import cv2
 from PIL import Image
 import imgui
 import argparse
@@ -39,7 +39,7 @@ from camera.std_camera import StdCamera
 
 class LiveDataConvert(AppBase):
     def __init__(self):
-        super().__init__(title="Live Data Conversion")
+        super().__init__(title="Live Data Conversion", width=848, height=1000)
 
         self.depth_cam = StdCamera()
 
@@ -47,25 +47,33 @@ class LiveDataConvert(AppBase):
         parser.add_argument('-i', '--bag_in', nargs='?', required=True, type=str, help='Path to realsense .bag input file')
         parser.add_argument('-o', '--out', nargs='?', required=True, type=str, help='Directory to save formatted date')
         parser.add_argument('--colors', nargs='?', required=True, type=int, help='Num colors to look for in input image, to convert to labels')
-        parser.add_argument('--colors_num_restarts', nargs='?', required=False, type=int, help='Num times to run EM algorithm in search of best fit for colors/labels')
-        parser.add_argument('--colors_num_iterations', nargs='?', required=False, type=int, help='Num rounds to run EM iteration per full pass of algorithm in search of best fit for colors/labels')
-        parser.add_argument('--plane_num_iterations', nargs='?', required=False, type=int, help='Num random planes to propose looking for best fit')
+        # parser.add_argument('--colors_num_restarts', nargs='?', required=False, type=int, help='Num times to run EM algorithm in search of best fit for colors/labels')
+        # parser.add_argument('--colors_num_iterations', nargs='?', required=False, type=int, help='Num rounds to run EM iteration per full pass of algorithm in search of best fit for colors/labels')
+        # parser.add_argument('--plane_num_iterations', nargs='?', required=False, type=int, help='Num random planes to propose looking for best fit')
         parser.add_argument('--plane_z_threshold', nargs='?', required=True, type=float, help='Z-value threshold in plane coordinates for clipping depth image pixels')
         parser.add_argument('--max_images', nargs='?', required=False, type=int, help='Maximum number of images to process')
         parser.add_argument('--frames_timestamp_max_diff', nargs='?', required=False, type=float, help='Only process a frems if the depth & color frame have timestamps that are different by less than X (ms?)')
         parser.add_argument('--mask_model', nargs='?', required=False, type=str, help='Path to model to run to get mask')
         parser.add_argument('--mask_label', nargs='?', required=False, type=int, help='ID from given mask model to filter by')
+        parser.add_argument('--gaussian_noise', nargs='?', required=False, type=float, help='Variance of gaussian filter to apply to input depth image')
 
         args = parser.parse_args()
+
+        self.gaussian_noise = float(args.gaussian_noise or 0)
+
+        self.SCALE_VARIANCE = 0.1
+        self.SCALE_SKEW_VARIANCE = 0
+        self.ROTATE_VARIANCE = 0
+        self.TRANSLATE_VARIANCE = 0
 
         IN_PATH = args.bag_in
         self.OUT_PATH = args.out
 
         self.COLOR_EM_NUM_COLORS = args.colors
-        self.COLOR_EM_NUM_TRIES = args.colors_num_restarts or 8
-        self.COLOR_EM_ITERATIONS = args.colors_num_iterations or 32
+        self.COLOR_EM_NUM_TRIES = 8
+        self.COLOR_EM_ITERATIONS = 32
 
-        self.PLANE_RANSAC_NUM_CANDIDATES = args.plane_num_iterations or 25000
+        self.PLANE_RANSAC_NUM_CANDIDATES = 25000
         self.PLANE_Z_THRESHOLD = args.plane_z_threshold
 
         self.calibrated_plane = CalibratedPlane(self.PLANE_RANSAC_NUM_CANDIDATES, self.PLANE_Z_THRESHOLD)
@@ -115,6 +123,7 @@ class LiveDataConvert(AppBase):
             vtxes_shape = (self.DIM_Y, self.DIM_X))
 
         self.depth_gpu = GpuBuffer((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
+        self.depth_gpu_2 = GpuBuffer((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
         if self.mask_model:
             self.mask_labels = np.zeros((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
@@ -241,10 +250,10 @@ class LiveDataConvert(AppBase):
 
         # dont randomly transform 1st frame.
         if self.frame_count > 2:
-            SCALE_VARIANCE = 0.2
-            SCALE_SKEW_VARIANCE = 0.06
-            ROTATE_VARIANCE = 0.3
-            TRANSLATE_VARIANCE = 150
+            SCALE_VARIANCE = self.SCALE_VARIANCE
+            SCALE_SKEW_VARIANCE = self.SCALE_SKEW_VARIANCE
+            ROTATE_VARIANCE = self.ROTATE_VARIANCE
+            TRANSLATE_VARIANCE = self.TRANSLATE_VARIANCE
         else:
             SCALE_VARIANCE = 0
             SCALE_SKEW_VARIANCE = 0
@@ -371,6 +380,15 @@ class LiveDataConvert(AppBase):
             self.obj_mesh.vtx_pos.cu(),
             grid=grid_dim,
             block=block_dim)
+
+        # apply gaussian filter to depth image
+        if self.gaussian_noise > 0.1:
+            self.points_ops.gaussian_depth_filter(
+                self.depth_gpu,
+                self.depth_gpu_2,
+                sigma=self.gaussian_noise,
+                k_size=15)
+            self.depth_gpu.cu().set(self.depth_gpu_2.cu())
 
         # copy back to cpu-side depth frame memory, so align processing block can run
         # self.depth_gpu.cu().get(depth_np)

@@ -13,10 +13,13 @@ def main():
     parser = argparse.ArgumentParser(description='Combine multiple datasets')
     parser.add_argument('-m', '--mapping', nargs='?', required=True, type=str, help='Path to JSON file describing merge')
     parser.add_argument('-o', '--out', nargs='?', required=True, type=str, help='Out directory for merged datasets')
+    parser.add_argument('--only_one', action='store_true', help='only output one image per set')
     args = parser.parse_args()
 
     MAPPING_PATH = args.mapping
     OUT_PATH = args.out
+
+    ONLY_ONE = args.only_one
 
     mapping = json.loads(open(MAPPING_PATH).read())
 
@@ -42,8 +45,7 @@ def main():
 
         print(f'dataset: {c_id}, num_images: {num_images}')
 
-        # for i in range(1):
-        for i in range(num_images):
+        for i in range(1 if ONLY_ONE else num_images):
             in_pfx = f'{c[1]}/{str(i).zfill(8)}_'
             out_pfx = f'{OUT_PATH}/{str(j).zfill(8)}_'
             shutil.copy(f'{in_pfx}depth.png', f'{out_pfx}depth.png')

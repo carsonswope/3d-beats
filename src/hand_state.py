@@ -2,7 +2,7 @@ import numpy as np
 import imgui
 
 class FingertipState:
-    def __init__(self, on_fn, off_fn, num_positions = 50, z_thresh = 150, midi_note = 36):
+    def __init__(self, on_fn, off_fn, num_positions = 40, z_thresh = 150, midi_note = 36):
         self.num_positions = num_positions
         self.positions = [0 for _ in range(self.num_positions)]
 

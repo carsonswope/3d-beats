@@ -20,9 +20,9 @@ Currently, 3d-beats only supports the RealSense D415 camera. I recommend downloa
 
 In general, if you are having issues with the camera, it is helpful to open up realsense viewer and confirm that you can start the 848x480 depth stream at 90 FPS. Sometimes I find that the USB cord needs to be plugged in the 'other' way to the camera to get full USB 3 support, which is required for 09 FPS.
 
-Mount the camera above the desk maybe 12-13" up. Something like [this](https://www.amazon.com/dp/B071VR8PWF) should allow you to mount it. It should be across the desk from you, pointed down at the desk but not directly down. Left-to-right should be the x direction of the camera, and the USB cord should be sticking out to your left, camera's right. This is just to make sure your hands are in the expected orientation, as the model is very sensitive to that kind of thing. You will probably need to do some adjustment of the camera to find the optimal position.
+Mount the camera approx 13-15" above the desk. Something like [this](https://www.amazon.com/dp/B071VR8PWF) should allow you to mount it. It should be across the desk from you, pointed down at the desk but not directly down. Left-to-right should be the x direction of the camera, and the USB cord should be sticking out to your left, camera's right. This is just to make sure your hands are in the expected orientation, as the model is very sensitive to that kind of thing. You will probably need to do some adjustment of the camera to find the optimal position.
 
-When you start 3d-beats, it will automatically calibrate itself to the table. The idea is that each fingertip and thumb is assigned it's own MIDI note. Keep your left and right hands apart from eachother, and tap on the desk with flat fingers (hope to support more piano-style type fingering soon..). As you tap on the desk, the tap thresholds will calibrate to each finger - so expect performance to improve after tapping with each fingertip a few times. If you open up the 'L' and 'R' toggles in the UI, you can see the graph of the estimated heights of each fingertip over time, and a visual indication of where the thresholds are and whether the note is on or off. Okay, so go ahead and make some beats now! 
+When you start 3d-beats, it will automatically calibrate itself to the table. The idea is that each fingertip and thumb is assigned it's own MIDI note. Keep your left and right hands apart from eachother, and tap on the desk with flat fingers (hope to support more piano-style type fingering soon..). As you tap on the desk, the tap thresholds will calibrate to each finger - so expect performance to improve after tapping with each fingertip a few times. The 'L Hand' and 'R Hand' graphs show the calculated heights of each fingertip over time, and a visual indication of where the thresholds are and whether the note is on or off. Okay, so go ahead and make some beats now! 
 
 ## Development
 
@@ -100,4 +100,3 @@ Now try the full 3d-beats app.
 - make new model. simpler 2-stage RDF architecture:
   - 1. fingertip OR {rest of hand} OR {thumb tip?} (2-3 classes)
   - 2. identify which fingertip (4-5 classes)
-  

@@ -65,12 +65,19 @@ class PointsOps():
     def gaussian_depth_filter(self, d_in: GpuBuffer, d_out: GpuBuffer, sigma:float, k_size:int=5):
 
         assert k_size <= self.MAX_FILTER_SIZE
-        assert len(d_in.shape) == 2
+        assert len(d_in.shape) == 2 or len(d_in.shape) == 3
+        if len(d_in.shape) == 2:
+            dim_y, dim_x = d_in.shape
+        elif len(d_in.shape) == 3:
+            _, dim_y, dim_x = d_in.shape
+        else:
+            print('unexpected input shape')
+            assert False
+
         assert d_in.shape == d_out.shape
         assert d_in.dtype == np.uint16
         assert d_out.dtype == np.uint16
 
-        dim_y, dim_x = d_in.shape
 
         b = (32, 32, 1)
         g = make_grid((dim_x, dim_y, 1), b)

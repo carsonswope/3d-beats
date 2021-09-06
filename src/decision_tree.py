@@ -38,16 +38,17 @@ class DecisionTreeDatasetConfig():
             datasets.append(DecisionTreeDatasetConfig(dataset_dir, 
                 num_images=num_images,
                 images_per_block=images_per_block,
-                imgs_name=imgs_name,
-                img_idxes=images_to_fetch[start_i:start_i+num_images]))
+                imgs_name=imgs_name))
             start_i += num_images
 
         return tuple(datasets)
 
-    def __init__(self, dataset_dir, num_images=0, images_per_block=0, imgs_name='data0', img_idxes=None, randomize=False):
+    def __init__(self, dataset_dir, num_images=0, images_per_block=0, imgs_name='data0'):
 
         self.dataset_dir = dataset_dir
         cfg = json.loads(open(dataset_dir + 'config.json').read())
+        self.cfg = cfg
+        self.imgs_name = imgs_name
 
         self.img_dims = tuple(cfg['img_dims'])
         self.id_to_color = {0: np.array([0, 0, 0, 0], dtype=np.uint8)}
@@ -56,27 +57,35 @@ class DecisionTreeDatasetConfig():
 
         self.total_available_images = cfg['num_images']
 
-        if num_images == 0:
-            return
+        self.depth_blocks = None
+        self.labels_blocks = None
 
         self.num_images = num_images
+        if self.num_images == 0:
+            return
+
         self.images_per_block = images_per_block or self.num_images
 
         assert self.num_images % self.images_per_block == 0
         self.num_image_blocks = self.num_images // self.images_per_block
 
-        if randomize and img_idxes:
-            print('img idxes and randmize cant both be true')
-            assert False
-        
-        if randomize:
-            total_images = cfg['num_images']
-            img_idxes = list(range(total_images))
-            np.random.shuffle(img_idxes)
-            img_idxes = img_idxes[0:self.num_images]
+        self.sample()
 
-        if img_idxes:
-            assert len(img_idxes) == num_images
+    def __del__(self):
+        if self.depth_blocks:
+            del self.depth_blocks
+        if self.labels_blocks:
+            del self.labels_blocks
+
+    def sample(self):
+
+        if self.num_images == 0:
+            return
+
+        total_images = self.cfg['num_images']
+        img_idxes = list(range(total_images))
+        np.random.shuffle(img_idxes)
+        img_idxes = img_idxes[0:self.num_images]
 
         def get_image_block(i, arr_out, name):
             assert arr_out.shape == (self.images_per_block, self.img_dims[1], self.img_dims[0])
@@ -85,10 +94,15 @@ class DecisionTreeDatasetConfig():
                 img_idx = (i * self.images_per_block) + j
                 if img_idxes:
                     img_idx = img_idxes[img_idx]
-                arr_out[j] = np.array(Image.open(f'{dataset_dir}/{str(img_idx).zfill(8)}_{name}.png')).astype(np.uint16)
+                arr_out[j] = np.array(Image.open(f'{self.dataset_dir}/{str(img_idx).zfill(8)}_{name}.png')).astype(np.uint16)
 
-        self.depth_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i,a: get_image_block(i,a,'depth'), imgs_name + '/depth')
-        self.labels_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i,a: get_image_block(i,a,'labels'), imgs_name + '/labels')
+        if self.depth_blocks:
+            del self.depth_blocks
+        if self.labels_blocks:
+            del self.labels_blocks
+
+        self.depth_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i,a: get_image_block(i,a,'depth'), self.imgs_name + '/depth')
+        self.labels_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i,a: get_image_block(i,a,'labels'), self.imgs_name + '/labels')
 
     def num_classes(self):
         return len(self.id_to_color)

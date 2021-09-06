@@ -2,12 +2,23 @@ import numpy as np
 
 import argparse
 
-import pycuda.driver as cu
-import pycuda.autoinit
+from engine.window import AppBase, run_app
 
+import glfw
 from decision_tree import *
 
 np.set_printoptions(suppress=True)
+
+class EvalModel(AppBase):
+    def __init__(self):
+        super().__init__(title="Eval Model", width=5, height=5)
+        
+    def splash(self):
+        pass
+
+    def tick(self, t):
+        main()
+        glfw.set_window_should_close(self.window, True)
 
 def main():
 
@@ -56,4 +67,4 @@ def main():
         im.save(f'{OUT_PATH}/eval_labels_{str(i).zfill(8)}.png')
 
 if __name__ == '__main__':
-    main()
+    run_app(EvalModel)

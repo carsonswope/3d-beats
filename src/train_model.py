@@ -1,17 +1,34 @@
 import numpy as np
 from PIL import Image
 
-import pycuda.driver as cu
-import pycuda.autoinit
+import glfw
+
+# import pycuda.driver as cu
+# import pycuda.autoinit
 import pycuda.gpuarray as cu_array
 
 from decision_tree import *
+
+from engine.window import AppBase, run_app
 
 from util import MAX_UINT16
 
 import argparse
 
 np.set_printoptions(suppress=True)
+
+# todo! integrate into app form more
+class TrainModel(AppBase):
+    def __init__(self):
+        super().__init__(title="Train model", width=16, height=16, resizeable=False)
+        
+    def splash(self):
+        pass
+
+    def tick(self, t):
+        main()
+        glfw.set_window_should_close(self.window, True)
+
 
 def main():
 
@@ -68,13 +85,17 @@ def main():
     forest_cpu = np.zeros((TREES_IN_FOREST, tree1.TOTAL_TREE_NODES, tree1.TREE_NODE_ELS), dtype=np.float32)
 
     test_labels_cu = cu_array.GPUArray(test_data.images_shape(), dtype=np.uint16)
-    test_data.get_labels_block_cu(0, test_labels_cu)
-    test_labels_cpu = test_labels_cu.get()
-
     test_depth_cu = cu_array.GPUArray(test_data.images_shape(), dtype=np.uint16)
-    test_data.get_depth_block_cu(0, test_depth_cu)
 
     for i in range(TREES_TO_TRAIN):
+        if i > 0:
+            train_data.sample()
+            test_data.sample()
+
+        test_data.get_depth_block_cu(0, test_depth_cu)
+        test_data.get_labels_block_cu(0, test_labels_cu)
+        test_labels_cpu = test_labels_cu.get()
+
         print('training tree..')
         decision_tree_trainer.train(train_data, tree1)
 
@@ -105,6 +126,11 @@ def main():
 
     # evaluating forest!
     print('evaluating forest..')
+    # resample from test data again
+    test_data.sample()
+    test_data.get_depth_block_cu(0, test_depth_cu)
+    test_data.get_labels_block_cu(0, test_labels_cu)
+    test_labels_cpu = test_labels_cu.get()
     test_output_labels_cu.fill(np.uint16(MAX_UINT16))
     decision_tree_evaluator.get_labels_forest(forest1, test_depth_cu, test_output_labels_cu)
 
@@ -125,4 +151,4 @@ def main():
     """
 
 if __name__ == '__main__':
-    main()
+    run_app(TrainModel)
