@@ -45,7 +45,11 @@ def main():
     parser.add_argument('-o', '--out', nargs='?', required=True, type=str, help='Where to save the output model')
     parser.add_argument('-d', '--data', nargs='?', required=True, type=str, help='Directory containing the training data')
 
+    py_nvcc_utils.add_args(parser)
+
     args = parser.parse_args()
+
+    py_nvcc_utils.config_compiler(args)
 
     NUM_TRAIN_IMAGES = args.train
     IMAGES_PER_TRAINING_BLOCK = args.train_block # if none, this will default to NUM_TRAIN_IMAGES
@@ -88,9 +92,6 @@ def main():
     test_depth_cu = cu_array.GPUArray(test_data.images_shape(), dtype=np.uint16)
 
     for i in range(TREES_TO_TRAIN):
-        if i > 0:
-            train_data.sample()
-            test_data.sample()
 
         test_data.get_depth_block_cu(0, test_depth_cu)
         test_data.get_labels_block_cu(0, test_labels_cu)
@@ -126,10 +127,6 @@ def main():
 
     # evaluating forest!
     print('evaluating forest..')
-    # resample from test data again
-    test_data.sample()
-    test_data.get_depth_block_cu(0, test_depth_cu)
-    test_data.get_labels_block_cu(0, test_labels_cu)
     test_labels_cpu = test_labels_cu.get()
     test_output_labels_cu.fill(np.uint16(MAX_UINT16))
     decision_tree_evaluator.get_labels_forest(forest1, test_depth_cu, test_output_labels_cu)

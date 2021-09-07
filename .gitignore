@@ -1,15 +1,11 @@
 build
 *.blend1
 .vscode
-evals
 __pycache__
-datagen/gen
-datagen/genstereo
-datagen/gen_4class
-datagen/genstereo-filterable
-datagen/sets
-models_out
-model
+
+data
+models
+evals
 
 src/cuda/deps/glm
 imgui.ini

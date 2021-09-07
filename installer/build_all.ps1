@@ -15,8 +15,8 @@ if (Test-Path $pyi_temp) { Remove-Item -Recurse -Force $pyi_temp }
 
 # you need Inno Setup (6) installed to make the installer!
 
-$model_dir = 'model'
-$model_cfg = 'model/model_cfg.json'
+$model_dir = 'models/m1'
+$model_cfg = 'models/m1/m_cfg.json'
 $fatbin_dir = 'cuda_fatbin'
 
 &'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' `
@@ -26,5 +26,5 @@ $fatbin_dir = 'cuda_fatbin'
   /Dmodel_cfg=$model_cfg `
   /Dfatbin_dir=$fatbin_dir `
   /DAPP_NAME=3d-beats `
-  /DAPP_VERSION=2.0 `
+  /DAPP_VERSION=2.1 `
   /Oinstaller

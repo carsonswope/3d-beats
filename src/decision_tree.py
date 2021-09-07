@@ -57,9 +57,6 @@ class DecisionTreeDatasetConfig():
 
         self.total_available_images = cfg['num_images']
 
-        self.depth_blocks = None
-        self.labels_blocks = None
-
         self.num_images = num_images
         if self.num_images == 0:
             return
@@ -68,19 +65,6 @@ class DecisionTreeDatasetConfig():
 
         assert self.num_images % self.images_per_block == 0
         self.num_image_blocks = self.num_images // self.images_per_block
-
-        self.sample()
-
-    def __del__(self):
-        if self.depth_blocks:
-            del self.depth_blocks
-        if self.labels_blocks:
-            del self.labels_blocks
-
-    def sample(self):
-
-        if self.num_images == 0:
-            return
 
         total_images = self.cfg['num_images']
         img_idxes = list(range(total_images))
@@ -92,14 +76,8 @@ class DecisionTreeDatasetConfig():
             assert arr_out.dtype == np.uint16
             for j in range(self.images_per_block):
                 img_idx = (i * self.images_per_block) + j
-                if img_idxes:
-                    img_idx = img_idxes[img_idx]
+                img_idx = img_idxes[img_idx]
                 arr_out[j] = np.array(Image.open(f'{self.dataset_dir}/{str(img_idx).zfill(8)}_{name}.png')).astype(np.uint16)
-
-        if self.depth_blocks:
-            del self.depth_blocks
-        if self.labels_blocks:
-            del self.labels_blocks
 
         self.depth_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i,a: get_image_block(i,a,'depth'), self.imgs_name + '/depth')
         self.labels_blocks = CompressedBlocksStatic(self.num_image_blocks, self.images_per_block, self.img_dims, lambda i,a: get_image_block(i,a,'labels'), self.imgs_name + '/labels')

@@ -472,15 +472,15 @@ class LiveDataConvert(AppBase):
 
         self.color_image_rgba_gpu.set(self.color_image_rgba)
 
+        self.begin_imgui_main()
+
         imgui.text('image below')
-        # poor mans dpi for now..
-        imgui.image(self.color_image_rgba_gpu.gl(), self.DIM_X, self.DIM_Y)
-        # imgui.text('diff..')
-        # imgui.image(self.fbo_rgb_2.gl(), self.DIM_X // 2, self.DIM_Y // 2)
+        imgui.image(self.color_image_rgba_gpu.gl(), self.DIM_X * self.dpi_scale, self.DIM_Y * self.dpi_scale)
 
         imgui.text('re-rendered')
-        # imgui.image(self.fbo_rgb_2.gl(), self.DIM_X, self.DIM_Y)
-        imgui.image(self.fbo_rgba.gl(), self.DIM_X, self.DIM_Y)
+        imgui.image(self.fbo_rgba.gl(), self.DIM_X * self.dpi_scale, self.DIM_Y * self.dpi_scale)
+
+        imgui.end()
 
 
 if __name__ == '__main__':

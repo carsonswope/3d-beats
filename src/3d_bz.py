@@ -101,12 +101,12 @@ class App_3d_bz(AppBase):
         self.labels_image_rgba_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
         mean_shift_variances = np.array(
-            [100., 50., 50., 50., 50., 50.],
+            [100., 50., 50., 50., 50., 50., 50.],
             dtype=np.float32)
         self.mean_shift_variances = cu_array.to_gpu(mean_shift_variances)
 
         self.fingertip_idxes = [2, 3, 4, 5, 6]
-        self.DEFAULT_FINGERTIP_THRESHOLDS = [180., 160., 160., 160., 160.]
+        self.DEFAULT_FINGERTIP_THRESHOLDS = [200., 160., 160., 160., 160.]
         # (z_thresh, midi_note)
         init_hand_state = lambda n: [(self.DEFAULT_FINGERTIP_THRESHOLDS[i], n+i) for i in range(len(self.fingertip_idxes))]
 

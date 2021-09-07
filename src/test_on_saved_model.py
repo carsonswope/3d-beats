@@ -41,7 +41,7 @@ def main():
     decision_tree_evaluator = DecisionTreeEvaluator()
 
     print('loading data')
-    dataset = DecisionTreeDatasetConfig(DATASET_PATH, num_images=NUM_IMAGES, imgs_name='test', randomize=True)
+    dataset = DecisionTreeDatasetConfig(DATASET_PATH, num_images=NUM_IMAGES, imgs_name='test')
 
     dataset_test_depth = cu_array.GPUArray(dataset.images_shape(), dtype=np.uint16)
     dataset.get_depth_block_cu(0, dataset_test_depth)

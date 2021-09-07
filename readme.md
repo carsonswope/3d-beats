@@ -97,6 +97,6 @@ Now try the full 3d-beats app.
 - ignore fingertips that are not featured prominently / or have high variance from mean shift
 - handle when mean shift has identified a pixel which is not part of the depth image (0 depth!)
 - auto-tuning of plane / z threshold. should be able to determine best z threshold automatically
-- make new model. simpler 2-stage RDF architecture:
-  - 1. fingertip OR {rest of hand} OR {thumb tip?} (2-3 classes)
-  - 2. identify which fingertip (4-5 classes)
+- training: resample input data for each tree trained in the forest, resample test data as well
+- debug the occasional super slow frame. garbage collection ?
+- don't compute mean shift for non-fingertip classes (hand/arm class)
