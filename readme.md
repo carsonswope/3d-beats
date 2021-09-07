@@ -1,6 +1,6 @@
 # 3d-beats
 
-![Hand Classifier](rdf.gif)
+![3d-beats](clip.gif)
 
 At the core, this is an implementation of depth image pixel classification via randomized decision forests, as outlined in *Real-Time Human Pose Recognition in Parts from Single Depth Images* (look in docs). This is the technique used in the original microsoft kinect for realtime human pose estimation.
 
