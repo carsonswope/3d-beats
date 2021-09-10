@@ -49,6 +49,8 @@ class App_3d_bz(AppBase):
 
         self.midi = Midi()
 
+        self.LABELS_REDUCE = 2
+
         self.NO_DEBUG = args.no_debug
 
         self.NUM_RANDOM_GUESSES = args.plane_num_iterations or 25000
@@ -67,7 +69,7 @@ class App_3d_bz(AppBase):
 
         print('loading forest')
 
-        self.layered_rdf = LayeredDecisionForest.load(args.cfg, (480, 848))
+        self.layered_rdf = LayeredDecisionForest.load(args.cfg, (480, 848), labels_reduce = self.LABELS_REDUCE)
 
         self.points_ops = PointsOps()
 
@@ -94,11 +96,15 @@ class App_3d_bz(AppBase):
         self.coord_croups_cpu = np.zeros((self.depth_mm_dims[0] * self.depth_mm_dims[1], 3), dtype=np.int32)
         self.coord_groups_gpu = GpuBuffer((self.depth_mm_dims[0] * self.depth_mm_dims[1], 3), dtype=np.int32)
 
-        self.labels_image = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
-        self.labels_image_2 = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
-        self.labels_image_rgba_cpu = np.zeros((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
-        self.labels_image_rgba = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
-        self.labels_image_rgba_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
+        self.LABELS_DIM_X = self.DIM_X // self.LABELS_REDUCE
+        self.LABELS_DIM_Y = self.DIM_Y // self.LABELS_REDUCE
+        self.LABELS_DIM = (self.LABELS_DIM_Y, self.LABELS_DIM_X)
+
+        self.labels_image = GpuBuffer(self.LABELS_DIM, dtype=np.uint16)
+        self.labels_image_2 = GpuBuffer(self.LABELS_DIM, dtype=np.uint16)
+        self.labels_image_rgba_cpu = np.zeros(self.LABELS_DIM + (4,), dtype=np.uint8)
+        self.labels_image_rgba = GpuBuffer(self.LABELS_DIM + (4,), dtype=np.uint8)
+        self.labels_image_rgba_tex = GpuTexture((self.LABELS_DIM_X, self.LABELS_DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
         mean_shift_variances = np.array(
             [100., 50., 50., 50., 50., 50., 50.],
@@ -296,7 +302,7 @@ class App_3d_bz(AppBase):
         window_pad = 24 * self.dpi_scale
 
         imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (window_pad, window_pad))
-        imgui.set_next_window_position(0, 0)#self.DIM_Y * self.dpi_scale)
+        imgui.set_next_window_position(0, 0)
         imgui.set_next_window_size(self.width * self.dpi_scale, 220 * self.dpi_scale)
         imgui.set_next_window_bg_alpha(0.3)
         imgui.begin('Hand state', flags= imgui.WINDOW_NO_MOVE | imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_TITLE_BAR | imgui.WINDOW_NO_SCROLLBAR)
@@ -422,20 +428,20 @@ class App_3d_bz(AppBase):
         if flip_x:
             self.labels_image_2.cu().set(self.labels_image.cu())
             self.points_ops.flip_x(
-                np.array([self.DIM_X, self.DIM_Y], dtype=np.int32),
+                np.array([self.LABELS_DIM_X, self.LABELS_DIM_Y], dtype=np.int32),
                 self.labels_image_2.cu(),
                 self.labels_image.cu(),
-                grid=make_grid((self.DIM_X, self.DIM_Y, 1), (32, 32, 1)),
+                grid=make_grid((self.LABELS_DIM_X, self.LABELS_DIM_Y, 1), (32, 32, 1)),
                 block=(32, 32, 1))
 
         self.points_ops.make_rgba_from_labels(
-            np.uint32(self.DIM_X),
-            np.uint32(self.DIM_Y),
+            np.uint32(self.LABELS_DIM_X),
+            np.uint32(self.LABELS_DIM_Y),
             np.uint32(self.layered_rdf.num_layered_classes),
             self.labels_image.cu(),
             self.layered_rdf.label_colors.cu(),
             self.labels_image_rgba.cu(),
-            grid = ((self.DIM_X // 32) + 1, (self.DIM_Y // 32) + 1, 1),
+            grid = ((self.LABELS_DIM_X // 32) + 1, (self.LABELS_DIM_Y // 32) + 1, 1),
             block = (32,32,1))
 
         # self.cu_ctx.synchronize()
@@ -443,7 +449,7 @@ class App_3d_bz(AppBase):
 
         label_means = self.mean_shift.run(
             self.mean_shift_rounds,
-            self.labels_image.cu().reshape((1, self.DIM_Y, self.DIM_X)),
+            self.labels_image.cu().reshape((1, self.LABELS_DIM_Y, self.LABELS_DIM_X)),
             self.layered_rdf.num_layered_classes,
             self.mean_shift_variances)
 
@@ -486,6 +492,8 @@ class App_3d_bz(AppBase):
         for i, f_idx in zip(range(len(self.fingertip_idxes)), self.fingertip_idxes):
 
             px, py = label_means[f_idx-1].astype(np.int32)
+            px *= self.LABELS_REDUCE
+            py *= self.LABELS_REDUCE
             if px < 0 or py < 0 or px >= self.DIM_X or py >= self.DIM_Y:
                 hand_state.fingertips[i].reset_positions()
             else:

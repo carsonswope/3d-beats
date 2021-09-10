@@ -16,7 +16,7 @@ from engine.buffer import GpuBuffer
 
 class RunLive_Layered(AppBase):
     def __init__(self):
-        super().__init__(title="Layered RDF Demo")
+        super().__init__(title="Layered RDF Demo", width=848, height=800)
 
         parser = argparse.ArgumentParser(description='Train a classifier RDF for depth images')
         parser.add_argument('-cfg', nargs='?', required=True, type=str, help='Path to the layered decision forest config file')
@@ -35,16 +35,20 @@ class RunLive_Layered(AppBase):
 
         self.pipeline, self.depth_intrin, self.DIM_X, self.DIM_Y, self.FOCAL, self.PP = rs_util.start_stream(args)
 
-        self.layered_rdf = LayeredDecisionForest.load(args.cfg, (self.DIM_Y, self.DIM_X))
+        self.LABELS_REDUCE = 2
+
+        self.layered_rdf = LayeredDecisionForest.load(args.cfg, (self.DIM_Y, self.DIM_X), self.LABELS_REDUCE)
         self.points_ops = PointsOps()
 
         self.pts = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.float32)
 
         self.depth_image = GpuBuffer((1, self.DIM_Y, self.DIM_X), np.uint16)
-        self.labels_image = GpuBuffer((1, self.DIM_Y, self.DIM_X), dtype=np.uint16)
 
-        self.labels_image_rgba = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.uint8)
-        self.labels_image_rgba_tex = GpuTexture((self.DIM_X, self.DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
+
+        self.labels_image = GpuBuffer((1, self.DIM_Y // self.LABELS_REDUCE, self.DIM_X // self.LABELS_REDUCE), dtype=np.uint16)
+
+        self.labels_image_rgba = GpuBuffer((self.DIM_Y // self.LABELS_REDUCE, self.DIM_X // self.LABELS_REDUCE, 4), dtype=np.uint8)
+        self.labels_image_rgba_tex = GpuTexture((self.DIM_X // self.LABELS_REDUCE, self.DIM_Y // self.LABELS_REDUCE), (GL_RGBA, GL_UNSIGNED_BYTE))
 
         self.frame_num = 0
 
@@ -123,8 +127,8 @@ class RunLive_Layered(AppBase):
         # make RGBA image
         self.labels_image_rgba.cu().fill(0)
         self.points_ops.make_rgba_from_labels(
-            np.uint32(self.DIM_X),
-            np.uint32(self.DIM_Y),
+            np.uint32(self.DIM_X // self.LABELS_REDUCE),
+            np.uint32(self.DIM_Y // self.LABELS_REDUCE),
             np.uint32(self.layered_rdf.num_layered_classes),
             self.labels_image.cu(),
             self.layered_rdf.label_colors.cu(),
@@ -135,7 +139,22 @@ class RunLive_Layered(AppBase):
 
         self.frame_num += 1
 
+        self.begin_imgui_main()
         imgui.image(self.labels_image_rgba_tex.gl(), self.DIM_X * self.dpi_scale, self.DIM_Y * self.dpi_scale)
+        imgui.end()
+
+        imgui.set_next_window_size(200 * self.dpi_scale, 124 * self.dpi_scale)
+        imgui.set_next_window_bg_alpha(0.3)
+        imgui.begin('profile', imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_TITLE_BAR | imgui.WINDOW_NO_SCROLLBAR)
+        profile_plot_width = 150 * self.dpi_scale
+        profile_plot_height = 60 * self.dpi_scale
+        imgui.text(f'ms/frame: {"{:.1f}".format(self.ms_per_frame_log[-1])}')
+        imgui.plot_lines('##ms-frame',
+            np.array(self.ms_per_frame_log, dtype=np.float32),
+            scale_max=100.,
+            scale_min=0.,
+            graph_size=(profile_plot_width , profile_plot_height))
+        imgui.end()
 
 if __name__ == '__main__':
     run_app(RunLive_Layered)

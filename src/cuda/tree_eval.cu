@@ -25,8 +25,8 @@ extern "C" {__global__
     void evaluate_image_using_forest(
         int NUM_TREES,
         int NUM_IMAGES,
-        int IMG_DIM_X,
-        int IMG_DIM_Y,
+        int depth_dim_x,
+        int depth_dim_y,
         int NUM_CLASSES,
         int MAX_TREE_DEPTH,
         int BLOCK_DIM_X,
@@ -34,14 +34,15 @@ extern "C" {__global__
         int filter_class,
         uint16* _filter,
         float* _forest,
-        uint16* _labels_out)
+        uint16* _labels_out,
+        int labels_reduce)
 {
 
     extern __shared__ float _thread_pdf[];
     Array2d<float> thread_pdf(_thread_pdf, {BLOCK_DIM_X, NUM_CLASSES});
 
-    const int2 IMG_DIM{IMG_DIM_X, IMG_DIM_Y};
-    const int TOTAL_NUM_PIXELS = NUM_IMAGES * IMG_DIM.x * IMG_DIM.y;
+    const int2 labels_img_dim{depth_dim_x / labels_reduce, depth_dim_y / labels_reduce};
+    const int TOTAL_NUM_PIXELS = NUM_IMAGES * labels_img_dim.x * labels_img_dim.y;
     const int TREE_NODE_ELS = 7 + NUM_CLASSES + NUM_CLASSES; // (ux,uy,vx,vy,thresh,l_next,r_next,{l_pdf},{r_pdf})
 
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -59,13 +60,16 @@ extern "C" {__global__
 
     __syncthreads();
 
-    const int img_idx = i / (IMG_DIM.x * IMG_DIM.y);
-    const int i_rem = i % (IMG_DIM.x * IMG_DIM.y);
-    const int img_y = i_rem / IMG_DIM.x;
-    const int img_x = i_rem % IMG_DIM.x;
+    const int img_idx = i / (labels_img_dim.x * labels_img_dim.y);
+    const int i_rem = i % (labels_img_dim.x * labels_img_dim.y);
+    const int img_y = i_rem / labels_img_dim.x;
+    const int img_x = i_rem % labels_img_dim.x;
 
-    Array3d<uint16> img_in(_img_in, {NUM_IMAGES,IMG_DIM_Y,IMG_DIM_X}, MAX_UINT16);
-    Array3d<uint16> labels_out(_labels_out, {NUM_IMAGES,IMG_DIM_Y,IMG_DIM_X});
+    const int depth_img_y = img_y * labels_reduce;
+    const int depth_img_x = img_x * labels_reduce;
+
+    Array3d<uint16> img_in(_img_in, {NUM_IMAGES,depth_dim_y,depth_dim_x}, MAX_UINT16);
+    Array3d<uint16> labels_out(_labels_out, {NUM_IMAGES,labels_img_dim.y,labels_img_dim.x});
 
     const int TOTAL_TREE_NODES = (1 << MAX_TREE_DEPTH) - 1;
 
@@ -74,13 +78,13 @@ extern "C" {__global__
 
     // Don't try to evaluate if filtering by a filter image!
     if (filter_class != -1) {
-        Array3d<uint16> filter(_filter, {NUM_IMAGES,IMG_DIM_Y,IMG_DIM_X}, MAX_UINT16);
+        Array3d<uint16> filter(_filter, {NUM_IMAGES,labels_img_dim.y,labels_img_dim.x}, MAX_UINT16);
         const uint16 img_label = filter.get({img_idx, img_y, img_x});
         if ((int)img_label != filter_class) { return; }
     }
 
     // Don't try to evaluate if img in has 0 value!
-    const uint16 img_d = img_in.get({img_idx, img_y, img_x});
+    const uint16 img_d = img_in.get({img_idx, depth_img_y, depth_img_x});
     if (img_d == 0 || img_d == MAX_UINT16) { return; } // max uint16 is also considered 'pixel not present'
 
     // current node ID
@@ -96,7 +100,7 @@ extern "C" {__global__
         const int l_next = __float2int_rd(d_ptr[5]);
         const int r_next = __float2int_rd(d_ptr[6]);
 
-        const float f = compute_feature(img_in, img_idx, int2{img_x, img_y}, u, v);
+        const float f = compute_feature(img_in, img_idx, int2{depth_img_x, depth_img_y}, u, v);
         float* final_pdf = nullptr;
 
         if (f < thresh) {
