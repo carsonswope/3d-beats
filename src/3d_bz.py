@@ -58,7 +58,10 @@ class App_3d_bz(AppBase):
 
         self.gauss_sigma = 2.5
         self.z_thresh_offset = 25.
-        self.min_velocity = 5.
+        self.min_velocity = 10.
+
+        self.velocity_sensitive = True
+        self.max_velocity = 120. # anything w/ higher velocity is clipped at this point
         
         self.group_min_size = 0.06
 
@@ -313,21 +316,33 @@ class App_3d_bz(AppBase):
         # right hand on right
         self.hand_states[0].draw_imgui(self.z_thresh_offset, self.dpi_scale, (pos_start_x + (self.width * self.dpi_scale / 2), pos_start_y))
 
-        # per finger calibration
         imgui.new_line()
+        pos_start_x, pos_start_y = imgui.get_cursor_pos()
+
+        imgui.push_item_width(200)
+        _, self.min_velocity = imgui.slider_float('min velocity', self.min_velocity, 0., 50.)
+        _, self.velocity_sensitive = imgui.checkbox('velocity sensitive', self.velocity_sensitive)
+        if self.velocity_sensitive:
+            _, self.max_velocity = imgui.slider_float('max velocity', self.max_velocity, 50., 200.)
+        imgui.pop_item_width()
+
+        imgui.set_cursor_pos((pos_start_x + 400, pos_start_y))
+
+        # per finger calibration
         if imgui.button('reset fingers'):
             for h in self.hand_states:
                 for f, t in zip(h.fingertips, self.DEFAULT_FINGERTIP_THRESHOLDS):
                     f.z_thresh = t
         
-        imgui.same_line()
+        imgui.set_cursor_pos((pos_start_x + 400, imgui.get_cursor_pos()[1]))
         self.calibrate_next_frame = imgui.button('recalibrate plane')
 
-        imgui.new_line()
+        imgui.set_cursor_pos((pos_start_x + 400, imgui.get_cursor_pos()[1]))
+        imgui.push_item_width(200)
         self.midi.draw_imgui()
+        imgui.pop_item_width()
 
         imgui.end()
-
 
         imgui.set_next_window_position(0, (self.DIM_Y + 220) * self.dpi_scale)
         imgui.set_next_window_size(400 * self.dpi_scale, 124 * self.dpi_scale)
@@ -337,7 +352,6 @@ class App_3d_bz(AppBase):
         imgui.push_item_width(150. * self.dpi_scale)
         _, self.PLANE_Z_OUTLIER_THRESHOLD = imgui.slider_float('plane threshold', self.PLANE_Z_OUTLIER_THRESHOLD, 0., 100.)
         _, self.z_thresh_offset = imgui.slider_float('finger threshold offset', self.z_thresh_offset, 0., 100.)
-        _, self.min_velocity = imgui.slider_float('min velocity', self.min_velocity, 0., 100.)
         imgui.pop_item_width()
 
 
@@ -491,6 +505,10 @@ class App_3d_bz(AppBase):
 
         for i, f_idx in zip(range(len(self.fingertip_idxes)), self.fingertip_idxes):
 
+            hand_state.fingertips[i].velocity_sensitive = self.velocity_sensitive
+            hand_state.fingertips[i].min_velocity = self.min_velocity
+            hand_state.fingertips[i].max_velocity = self.max_velocity
+
             px, py = label_means[f_idx-1].astype(np.int32)
             px *= self.LABELS_REDUCE
             py *= self.LABELS_REDUCE
@@ -504,7 +522,7 @@ class App_3d_bz(AppBase):
                 pt.append(1.)
                 pt = self.calibrated_plane.plane @ pt
                 pt_z = -pt[2]
-                hand_state.fingertips[i].next_z_pos(pt_z, self.z_thresh_offset, self.min_velocity)
+                hand_state.fingertips[i].next_z_pos(pt_z, self.z_thresh_offset)
 
 if __name__ == '__main__':
     run_app(App_3d_bz)

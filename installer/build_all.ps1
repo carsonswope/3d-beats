@@ -26,5 +26,5 @@ $fatbin_dir = 'cuda_fatbin'
   /Dmodel_cfg=$model_cfg `
   /Dfatbin_dir=$fatbin_dir `
   /DAPP_NAME=3d-beats `
-  /DAPP_VERSION=2.1 `
+  /DAPP_VERSION=2.2 `
   /Oinstaller

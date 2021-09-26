@@ -15,7 +15,13 @@ class FingertipState:
         self.midi_note = midi_note
         self.note_on = False
 
-        self.calibrate_alpha = 0.05
+        self.calibrate_alpha = 0.1
+
+        self.min_velocity = 15.
+        self.velocity_sensitive = True
+        self.max_velocity = 150.
+
+        self.min_midi_velocity = 0.4 # out of 1
     
     def reset_positions(self):
         # turn off note if on
@@ -23,7 +29,7 @@ class FingertipState:
         self.set_midi_state(False)
         pass
 
-    def next_z_pos(self, z_pos, z_thresh_offset, min_velocity):
+    def next_z_pos(self, z_pos, z_thresh_offset):
 
         self.positions.append(z_pos)
         while len(self.positions) > self.num_positions:
@@ -33,18 +39,26 @@ class FingertipState:
             # z_pos = self.positions[-1]
             # must be located below 'on surface' threshold, and have downward velocity above threshold to be a note
             if z_pos < (self.z_thresh + z_thresh_offset):
-                if np.all(-np.diff(self.positions)[-2:] > min_velocity):
-                    self.set_midi_state(True)
+                last_2_velocities = -np.diff(self.positions)[-2:]
+                if np.all(last_2_velocities > self.min_velocity):
+                    if self.velocity_sensitive:
+                        v = (np.sum(last_2_velocities) / 2) / (self.max_velocity - self.min_velocity)
+                        v = self.min_midi_velocity + (v * (1 - self.min_midi_velocity))
+                        if v > 1:
+                            v = 1
+                    else:
+                        v = 1.
+                    self.set_midi_state(True, v)
             else:
-                self.set_midi_state(False)
+                self.set_midi_state(False, 0)
         
         if self.note_on:
             self.on_positions.append(z_pos)
 
-    def set_midi_state(self, s):
+    def set_midi_state(self, s, vel):
         if s and not self.note_on:
             self.note_on = True
-            self.on_fn(self.midi_note, 127) # todo: velocity!
+            self.on_fn(self.midi_note, int(vel * 127))
             self.on_positions.clear()
 
         elif not s and self.note_on:

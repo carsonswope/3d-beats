@@ -92,8 +92,6 @@ Now try the full 3d-beats app.
 
 # TODOs:
 
-- velocity:
-  - option to vary midi notes' velocity with velocity of tap
 - ignore fingertips that are not featured prominently / or have high variance from mean shift
 - handle when mean shift has identified a pixel which is not part of the depth image (0 depth!)
 - auto-tuning of plane / z threshold. should be able to determine best z threshold automatically
