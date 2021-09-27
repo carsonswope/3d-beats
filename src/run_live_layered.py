@@ -1,5 +1,4 @@
 from OpenGL.GL import * 
-import pyrealsense2
 import numpy as np
 import argparse
 import imgui
@@ -33,6 +32,7 @@ class RunLive_Layered(AppBase):
 
         self.calibrated_plane = CalibratedPlane(NUM_RANDOM_GUESSES, self.PLANE_Z_OUTLIER_THRESHOLD)
 
+        self.TRAIN_DIM_X = 848
         self.pipeline, self.depth_intrin, self.DIM_X, self.DIM_Y, self.FOCAL, self.PP = rs_util.start_stream(args)
 
         self.LABELS_REDUCE = 2
@@ -122,7 +122,8 @@ class RunLive_Layered(AppBase):
             block=block_dim2)
 
         # run RDF!
-        self.layered_rdf.run(self.depth_image, self.labels_image)
+        # scale_factor = 
+        self.layered_rdf.run(self.depth_image, self.labels_image, self.DIM_X / self.TRAIN_DIM_X)
 
         # make RGBA image
         self.labels_image_rgba.cu().fill(0)

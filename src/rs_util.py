@@ -3,6 +3,7 @@ import numpy as np
 
 def add_args(parser):
     parser.add_argument('--rs_bag', nargs='?', required=False, type=str, help='Path to optional input realsense .bag file to use instead of live camera stream')
+    parser.add_argument('--rs_half_resolution', required=False, action='store_true', help='If using a live stream set input stream size to 424x240. (default is 848x480). This makes it run faster.')
 
 def start_stream(args):
 
@@ -25,7 +26,11 @@ def start_stream(args):
         device_config_json = open('hand_config.json', 'r').read()
         rs.rs400_advanced_mode(device).load_json(device_config_json)
         device.first_depth_sensor().set_option(rs.option.depth_units, 0.0001)
-        config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 90)
+
+        dim_x = 424 if args.rs_half_resolution else 848
+        dim_y = 240 if args.rs_half_resolution else 480
+
+        config.enable_stream(rs.stream.depth, dim_x, dim_y, rs.format.z16, 90)
 
     profile = pipeline.start(config)
     if rs_bag:

@@ -55,7 +55,7 @@ class FingertipState:
         if self.note_on:
             self.on_positions.append(z_pos)
 
-    def set_midi_state(self, s, vel):
+    def set_midi_state(self, s, vel=1.):
         if s and not self.note_on:
             self.note_on = True
             self.on_fn(self.midi_note, int(vel * 127))

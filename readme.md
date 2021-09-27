@@ -98,3 +98,4 @@ Now try the full 3d-beats app.
 - training: resample input data for each tree trained in the forest, resample test data as well
 - debug the occasional super slow frame. garbage collection ?
 - don't compute mean shift for non-fingertip classes (hand/arm class)
+- support older nvidia gpus (need to implement atomicAdd(float))

@@ -30,10 +30,7 @@ import imgui
 class App_3d_bz(AppBase):
     def __init__(self):
 
-        width = 848
-        height = 826
-
-        super().__init__(title="3d-beats", width=width, height=height, resizeable=False)
+        super().__init__(title="3d-beats", width=848, height=826, resizeable=False)
 
         self.t = ProfileTimer()
 
@@ -56,7 +53,7 @@ class App_3d_bz(AppBase):
         self.NUM_RANDOM_GUESSES = args.plane_num_iterations or 25000
         self.PLANE_Z_OUTLIER_THRESHOLD = 40.
 
-        self.gauss_sigma = 2.5
+        self.gauss_sigma = 2.0
         self.z_thresh_offset = 25.
         self.min_velocity = 10.
 
@@ -65,21 +62,20 @@ class App_3d_bz(AppBase):
         
         self.group_min_size = 0.06
 
-        self.mean_shift_rounds = 4
+        self.mean_shift_rounds = 6
 
         self.calibrated_plane = CalibratedPlane(self.NUM_RANDOM_GUESSES, self.PLANE_Z_OUTLIER_THRESHOLD)
         self.calibrate_next_frame = False
 
-        print('loading forest')
-
-        self.layered_rdf = LayeredDecisionForest.load(args.cfg, (480, 848), labels_reduce = self.LABELS_REDUCE)
-
-        self.points_ops = PointsOps()
-
-        self.mean_shift = MeanShift()
-
         print('initializing camera..')
         self.pipeline, self.depth_intrin, self.DIM_X, self.DIM_Y, self.FOCAL, self.PP = rs_util.start_stream(args)
+
+        print('loading forest')
+        self.TRAIN_DIM_X = 848
+        self.layered_rdf = LayeredDecisionForest.load(args.cfg, (self.DIM_Y, self.DIM_X), labels_reduce = self.LABELS_REDUCE)
+        self.EVAL_TO_TRAIN_DIM_RATIO = self.DIM_X / self.TRAIN_DIM_X
+        self.points_ops = PointsOps()
+        self.mean_shift = MeanShift()
 
         self.pts_cu = GpuBuffer((self.DIM_Y, self.DIM_X, 4), dtype=np.float32)
         self.depth_image = GpuBuffer((self.DIM_Y, self.DIM_X), dtype=np.uint16)
@@ -110,7 +106,7 @@ class App_3d_bz(AppBase):
         self.labels_image_rgba_tex = GpuTexture((self.LABELS_DIM_X, self.LABELS_DIM_Y), (GL_RGBA, GL_UNSIGNED_BYTE))
 
         mean_shift_variances = np.array(
-            [100., 50., 50., 50., 50., 50., 50.],
+            [50., 8., 8., 8., 8., 8., 8.],
             dtype=np.float32)
         self.mean_shift_variances = cu_array.to_gpu(mean_shift_variances)
 
@@ -212,7 +208,7 @@ class App_3d_bz(AppBase):
                 self.depth_image_2,
                 self.depth_image,
                 sigma=self.gauss_sigma,
-                k_size=7)
+                k_size=5)
 
         # make smaller depth image. faster to copy and process cpu-side
         self.points_ops.shrink_image(
@@ -294,10 +290,15 @@ class App_3d_bz(AppBase):
         self.begin_imgui_main()
 
         imgui.set_cursor_pos((0, 220 * self.dpi_scale))
+
+
+        # imgui.image(self.depth_image_mm_rgba_tex.gl(), self.DIM_X / 2., self.DIM_Y / 2.)
+        # imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X, self.DIM_Y)
+
         imgui.image(
             self.labels_image_rgba_tex.gl(),
-            self.DIM_X * self.dpi_scale,
-            self.DIM_Y * self.dpi_scale,
+            self.DIM_X * self.dpi_scale * (1 / self.EVAL_TO_TRAIN_DIM_RATIO),
+            self.DIM_Y * self.dpi_scale * (1 / self.EVAL_TO_TRAIN_DIM_RATIO),
             uv0=(1,0), uv1=(0,1)) # flip x and y to look like a mirror!
 
         imgui.end()
@@ -344,7 +345,7 @@ class App_3d_bz(AppBase):
 
         imgui.end()
 
-        imgui.set_next_window_position(0, (self.DIM_Y + 220) * self.dpi_scale)
+        imgui.set_next_window_position(0, ((self.DIM_Y * (1 / self.EVAL_TO_TRAIN_DIM_RATIO)) + 220) * self.dpi_scale)
         imgui.set_next_window_size(400 * self.dpi_scale, 124 * self.dpi_scale)
         imgui.set_next_window_bg_alpha(0.3)
         imgui.begin('settings', flags=imgui.WINDOW_NO_MOVE | imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_TITLE_BAR | imgui.WINDOW_NO_SCROLLBAR)
@@ -354,13 +355,9 @@ class App_3d_bz(AppBase):
         _, self.z_thresh_offset = imgui.slider_float('finger threshold offset', self.z_thresh_offset, 0., 100.)
         imgui.pop_item_width()
 
+        imgui.end()
 
-        # imgui.image(self.depth_image_mm_rgba_tex.gl(), self.DIM_X / 2., self.DIM_Y / 2.)
-        # imgui.image(self.depth_image_rgba_gpu_tex.gl(), self.DIM_X, self.DIM_Y)
-
-        imgui.end()        
-
-        imgui.set_next_window_position(400 * self.dpi_scale, (self.DIM_Y + 220) * self.dpi_scale)
+        imgui.set_next_window_position(400 * self.dpi_scale, ((self.DIM_Y * (1 / self.EVAL_TO_TRAIN_DIM_RATIO)) + 220) * self.dpi_scale)
         imgui.set_next_window_size(200 * self.dpi_scale, 124 * self.dpi_scale)
         imgui.set_next_window_bg_alpha(0.3)
         imgui.begin('profile', flags=imgui.WINDOW_NO_MOVE | imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_TITLE_BAR | imgui.WINDOW_NO_SCROLLBAR)
@@ -437,7 +434,7 @@ class App_3d_bz(AppBase):
         # self.cu_ctx.synchronize()
         # self.t.record('--evals')
 
-        self.layered_rdf.run(self.depth_image_2, self.labels_image)
+        self.layered_rdf.run(self.depth_image_2, self.labels_image, self.EVAL_TO_TRAIN_DIM_RATIO)
 
         if flip_x:
             self.labels_image_2.cu().set(self.labels_image.cu())

@@ -230,7 +230,7 @@ class LayeredDecisionForest():
         self.label_colors.cu().set(label_colors)
 
 
-    def run(self, depth_image, labels_image):
+    def run(self, depth_image, labels_image, scale_factor=1.):
 
         # TODO: assert depth image dims!
 
@@ -253,7 +253,8 @@ class LayeredDecisionForest():
                 single_labels_image.cu().reshape(label_img_dims),
                 labels_reduce=self.labels_reduce,
                 filter_images=self.label_images[filter_model].cu().reshape(label_img_dims) if (filter_model is not None) else None,
-                filter_images_class=filter_model_class)
+                filter_images_class=filter_model_class,
+                scale_factor=scale_factor)
 
         self.eval.make_composite_labels_image(
             self.labels_images_ptrs_cu.cu(),
@@ -294,7 +295,7 @@ class DecisionTreeEvaluator():
 
         
     # TODO: support filter image for single tree forest! or not??
-    def get_labels_forest(self, forest, depth_images_in, labels_out, labels_reduce = 1, filter_images=None, filter_images_class=None):
+    def get_labels_forest(self, forest, depth_images_in, labels_out, labels_reduce = 1, filter_images=None, filter_images_class=None, scale_factor=1.):
         num_images, dim_y, dim_x = depth_images_in.shape
 
         assert labels_out.shape == (num_images, dim_y // labels_reduce, dim_x // labels_reduce)
@@ -325,6 +326,7 @@ class DecisionTreeEvaluator():
             forest.forest_cu,
             labels_out,
             np.int32(labels_reduce),
+            np.float32(scale_factor),
             grid=grid_dim, block=block_dim, shared=(BLOCK_DIM_X * forest.num_classes * 4)) # sizeof(float), right?
 
 

@@ -35,7 +35,8 @@ extern "C" {__global__
         uint16* _filter,
         float* _forest,
         uint16* _labels_out,
-        int labels_reduce)
+        int labels_reduce,
+        float scale_factor)
 {
 
     extern __shared__ float _thread_pdf[];
@@ -100,7 +101,7 @@ extern "C" {__global__
         const int l_next = __float2int_rd(d_ptr[5]);
         const int r_next = __float2int_rd(d_ptr[6]);
 
-        const float f = compute_feature(img_in, img_idx, int2{depth_img_x, depth_img_y}, u, v);
+        const float f = compute_feature(img_in, img_idx, int2{depth_img_x, depth_img_y}, u, v, scale_factor);
         float* final_pdf = nullptr;
 
         if (f < thresh) {
