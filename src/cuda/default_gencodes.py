@@ -1,10 +1,12 @@
 GENCODES= [
-    # atomicAdd(double*, double) only introduced w/ arch 60.
-    # need to put in own implementation if need to backport
-    # 'arch=compute_52,code=sm_52',
-    # 'arch=compute_53,code=sm_53',
+    # w this version of cuda, cannot compile earlier than this!
+    'arch=compute_35,code=sm_35',
+    'arch=compute_37,code=sm_37',
+    'arch=compute_50,code=sm_50',
+    'arch=compute_52,code=sm_52',
+    'arch=compute_53,code=sm_53',
     'arch=compute_60,code=sm_60',
-    'arch=compute_60,code=compute_60',
+    # 'arch=compute_60,code=compute_60',
     'arch=compute_61,code=sm_61',
     'arch=compute_62,code=sm_62',
     'arch=compute_70,code=sm_70',
